@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block title %}Мои поездки | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 3rem;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+    }
+    
+    .page-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.2rem;
+        color: var(--primary);
+        position: relative;
+    }
+    
+    .page-title::after {
+        content: '';
+        position: absolute;
+        bottom: -8px;
+        left: 0;
+        width: 50px;
+        height: 3px;
+        background: var(--accent);
+    }
+    
+    .trips-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 2rem;
+    }
+    
+    .trip-card {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
+    }
+    
+    .trip-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    }
+    
+    .trip-header {
+        background: var(--primary);
+        color: white;
+        padding: 1.2rem;
+    }
+    
+    .trip-title {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin-bottom: 0.3rem;
+    }
+    
+    .trip-dates {
+        font-size: 0.9rem;
+        opacity: 0.9;
+    }
+    
+    .trip-body {
+        padding: 1.5rem;
+    }
+    
+    .trip-points {
+        margin-bottom: 1.5rem;
+    }
+    
+    .point-badge {
+        display: inline-block;
+        background: rgba(94, 53, 177, 0.1);
+        color: var(--primary);
+        padding: 0.3rem 0.8rem;
+        border-radius: 50px;
+        font-size: 0.8rem;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .trip-actions {
+        display: flex;
+        gap: 0.8rem;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 4rem 0;
+        grid-column: 1 / -1;
+    }
+    
+    .empty-icon {
+        font-size: 3rem;
+        color: var(--gray);
+        margin-bottom: 1rem;
+    }
+    
+    .empty-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.8rem;
+        color: var(--dark);
+        margin-bottom: 1rem;
+    }
+    
+    .empty-text {
+        color: var(--gray);
+        margin-bottom: 1.5rem;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    
+    /* Адаптивность */
+    @media (max-width: 768px) {
+        .page-title {
+            font-size: 1.8rem;
+        }
+        
+        .trips-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1 class="page-title">Мои поездки</h1>
+        <a href="/create_trip" class="btn btn-primary">+ Новая поездка</a>
+    </div>
+    
+    {% if trips %}
+    <div class="trips-grid">
+        {% for trip in trips %}
+        <div class="trip-card">
+            <div class="trip-header">
+                <h3 class="trip-title">{{ trip.title }}</h3>
+                <div class="trip-dates">{{ trip.start_date }} — {{ trip.end_date }}</div>
+            </div>
+            <div class="trip-body">
+                {% if trip.points %}
+                <div class="trip-points">
+                    {% for point in trip.points|slice(0, 3) %}
+                    <span class="point-badge">{{ point.location }}</span>
+                    {% endfor %}
+                    {% if trip.points|length > 3 %}
+                    <span class="point-badge">+{{ trip.points|length - 3 }} ещё</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                <div class="trip-actions">
+                    <a href="/trips/{{ trip.id }}" class="btn btn-outline" style="flex: 1;">Подробнее</a>
+                    <form action="/trips/{{ trip.id }}" method="POST" style="flex: 1;">
+                        <input type="hidden" name="_method" value="DELETE">
+                        <button type="submit" class="btn btn-danger" style="width: 100%;">Удалить</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">✈️</div>
+        <h3 class="empty-title">Пока нет поездок</h3>
+        <p class="empty-text">Создайте свою первую поездку и начните планировать приключение!</p>
+        <a href="/create_trip" class="btn btn-primary">Создать поездку</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

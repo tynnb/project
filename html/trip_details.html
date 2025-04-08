@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+
+{% block title %}{{ trip.title }} | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .trip-hero {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        color: white;
+        padding: 3rem 0;
+        margin-bottom: 3rem;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .trip-hero::before {
+        content: '';
+        position: absolute;
+        top: -50px;
+        right: -50px;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    
+    .trip-hero-content {
+        position: relative;
+        z-index: 1;
+    }
+    
+    .trip-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .trip-subtitle {
+        font-size: 1.2rem;
+        opacity: 0.9;
+        margin-bottom: 1.5rem;
+    }
+    
+    .trip-meta {
+        display: flex;
+        gap: 2rem;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+    }
+    
+    .meta-item {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+    }
+    
+    .meta-icon {
+        font-size: 1.3rem;
+    }
+    
+    .trip-actions {
+        display: flex;
+        gap: 1rem;
+        margin-top: 2rem;
+    }
+    
+    .trip-content {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 3rem;
+    }
+    
+    .timeline {
+        position: relative;
+        padding-left: 30px;
+    }
+    
+    .timeline::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 7px;
+        width: 2px;
+        background: var(--primary);
+    }
+    
+    .timeline-item {
+        position: relative;
+        padding-bottom: 2.5rem;
+    }
+    
+    .timeline-item:last-child {
+        padding-bottom: 0;
+    }
+    
+    .timeline-dot {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--primary);
+        border: 4px solid white;
+        box-shadow: 0 0 0 2px var(--primary);
+        z-index: 1;
+    }
+    
+    .timeline-content {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+        transition: all 0.3s;
+    }
+    
+    .timeline-content:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    }
+    
+    .point-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 1rem;
+    }
+    
+    .point-location {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--dark);
+    }
+    
+    .point-date {
+        font-size: 0.9rem;
+        color: var(--gray);
+        margin-bottom: 0.5rem;
+    }
+    
+    .point-details {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+    
+    .detail-card {
+        background: #f9f9f9;
+        border-radius: 8px;
+        padding: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+    }
+    
+    .detail-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: rgba(94, 53, 177, 0.1);
+        color: var(--primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+    }
+    
+    .detail-content h4 {
+        font-size: 0.8rem;
+        color: var(--gray);
+        margin-bottom: 0.3rem;
+    }
+    
+    .detail-content p {
+        font-weight: 500;
+    }
+    
+    .trip-sidebar {
+        position: sticky;
+        top: 100px;
+    }
+    
+    .map-container {
+        height: 200px;
+        background: #eee;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        overflow: hidden;
+        position: relative;
+    }
+    
+    .map-placeholder {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
+    .stats-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+        margin-bottom: 2rem;
+    }
+    
+    .stats-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.3rem;
+        margin-bottom: 1.5rem;
+        color: var(--primary);
+    }
+    
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.8rem 0;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    
+    .stat-item:last-child {
+        border-bottom: none;
+    }
+    
+    .stat-label {
+        color: var(--gray);
+    }
+    
+    .stat-value {
+        font-weight: 600;
+    }
+    
+    .notes-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+    }
+    
+    /* Адаптивность */
+    @media (max-width: 992px) {
+        .trip-content {
+            grid-template-columns: 1fr;
+        }
+        
+        .trip-sidebar {
+            order: -1;
+            position: static;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .trip-title {
+            font-size: 2rem;
+        }
+        
+        .point-details {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="trip-hero animate-fade">
+    <div class="container">
+        <div class="trip-hero-content">
+            <h1 class="trip-title">{{ trip.title }}</h1>
+            <p class="trip-subtitle">Ваше незабываемое путешествие</p>
+            
+            <div class="trip-meta">
+                <div class="meta-item">
+                    <i class="fas fa-calendar-alt meta-icon"></i>
+                    <span>{{ trip.start_date }} — {{ trip.end_date }}</span>
+                </div>
+                <div class="meta-item">
+                    <i class="fas fa-map-marker-alt meta-icon"></i>
+                    <span>{{ trip.points|length }} точек маршрута</span>
+                </div>
+            </div>
+            
+            <div class="trip-actions">
+                <a href="/trips/{{ trip.id }}/edit" class="btn btn-outline" style="background: rgba(255,255,255,0.1); color: white; border-color: white;">
+                    <i class="fas fa-edit"></i> Редактировать
+                </a>
+                <form action="/trips/{{ trip.id }}" method="POST">
+                    <input type="hidden" name="_method" value="DELETE">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="fas fa-trash-alt"></i> Удалить
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="trip-content">
+        <div class="trip-main">
+            <div class="timeline">
+                {% for point in trip.points %}
+                <div class="timeline-item">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-content">
+                        <div class="point-header">
+                            <div>
+                                <h3 class="point-location">{{ point.location }}</h3>
+                                {% if point.arrival_time or point.departure_time %}
+                                <div class="point-date">
+                                    {% if point.arrival_time %}
+                                    <span><i class="fas fa-plane-arrival"></i> {{ point.arrival_time }}</span>
+                                    {% endif %}
+                                    {% if point.departure_time %}
+                                    <span> → <i class="fas fa-plane-departure"></i> {{ point.departure_time }}</span>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="point-details">
+                            {% if point.flight_number %}
+                            <div class="detail-card">
+                                <div class="detail-icon">
+                                    <i class="fas fa-plane"></i>
+                                </div>
+                                <div class="detail-content">
+                                    <h4>Рейс</h4>
+                                    <p>{{ point.flight_number }}</p>
+                                </div>
+                            </div>
+                            {% endif %}
+                            
+                            {% if point.hotel_name %}
+                            <div class="detail-card">
+                                <div class="detail-icon">
+                                    <i class="fas fa-hotel"></i>
+                                </div>
+                                <div class="detail-content">
+                                    <h4>Отель</h4>
+                                    <p>{{ point.hotel_name }}</p>
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div class="trip-sidebar">
+            <div class="map-container">
+                <img src="https://maps.googleapis.com/maps/api/staticmap?center={{ trip.points[0].location|urlencode }}&zoom=5&size=600x300&maptype=roadmap&markers=color:red%7C{{ trip.points|map(attribute='location')|join('|') }}&key=YOUR_API_KEY" 
+                     alt="Карта маршрута" class="map-placeholder">
+            </div>
+            
+            <div class="stats-card">
+                <h3 class="stats-title">Статистика поездки</h3>
+                
+                <div class="stat-item">
+                    <span class="stat-label">Длительность</span>
+                    <span class="stat-value">{{ (trip.end_date - trip.start_date).days }} дней</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Точек маршрута</span>
+                    <span class="stat-value">{{ trip.points|length }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Перелеты</span>
+                    <span class="stat-value">{{ trip.points|selectattr('flight_number')|list|length }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Отели</span>
+                    <span class="stat-value">{{ trip.points|selectattr('hotel_name')|list|length }}</span>
+                </div>
+            </div>
+            
+            <div class="notes-card">
+                <h3 class="stats-title">Мои заметки</h3>
+                <p style="color: var(--gray);">Добавьте свои заметки о поездке...</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% block title %}Новая поездка | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    
+    .form-header {
+        margin-bottom: 2.5rem;
+    }
+    
+    .form-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.2rem;
+        color: var(--primary);
+        margin-bottom: 0.5rem;
+        position: relative;
+        display: inline-block;
+    }
+    
+    .form-title::after {
+        content: '';
+        position: absolute;
+        bottom: -8px;
+        left: 0;
+        width: 60px;
+        height: 3px;
+        background: var(--accent);
+    }
+    
+    .form-subtitle {
+        color: var(--gray);
+    }
+    
+    .trip-form {
+        background: white;
+        border-radius: 12px;
+        padding: 2.5rem;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.05);
+    }
+    
+    .form-section {
+        margin-bottom: 2.5rem;
+    }
+    
+    .section-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.5rem;
+        color: var(--primary);
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+        color: var(--dark);
+    }
+    
+    .form-control {
+        width: 100%;
+        padding: 0.8rem 1rem;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        font-size: 1rem;
+        transition: all 0.3s;
+    }
+    
+    .form-control:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(94, 53, 177, 0.1);
+    }
+    
+    .point-form {
+        background: #f9f9f9;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        border-left: 3px solid var(--primary);
+        position: relative;
+    }
+    
+    .point-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+    
+    .point-number {
+        background: var(--primary);
+        color: white;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    
+    .remove-point {
+        background: var(--danger);
+        color: white;
+        border: none;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .remove-point:hover {
+        transform: scale(1.1);
+    }
+    
+    .form-actions {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 2rem;
+    }
+    
+    /* Адаптивность */
+    @media (max-width: 768px) {
+        .form-row {
+            grid-template-columns: 1fr;
+        }
+        
+        .trip-form {
+            padding: 1.5rem;
+        }
+        
+        .form-title {
+            font-size: 1.8rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="form-container">
+        <div class="form-header">
+            <h1 class="form-title">Новая поездка</h1>
+            <p class="form-subtitle">Заполните информацию о вашем путешествии</p>
+        </div>
+        
+        <form method="POST" action="/create_trip" class="trip-form">
+            <div class="form-section">
+                <h2 class="section-title">Основная информация</h2>
+                
+                <div class="form-group">
+                    <label for="title">Название поездки</label>
+                    <input type="text" id="title" name="title" class="form-control" placeholder="Например: Отпуск в Италии" required>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="start_date">Дата начала</label>
+                        <input type="date" id="start_date" name="start_date" class="form-control" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="end_date">Дата окончания</label>
+                        <input type="date" id="end_date" name="end_date" class="form-control" required>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-section">
+                <h2 class="section-title">Точки маршрута</h2>
+                
+                <div id="points-container">
+                    <div class="point-form">
+                        <div class="point-header">
+                            <div class="point-number">1</div>
+                            <button type="button" class="remove-point" style="display: none;">×</button>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Местоположение</label>
+                            <input type="text" name="locations[]" class="form-control" placeholder="Город, страна" required>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Дата и время прибытия</label>
+                                <input type="datetime-local" name="arrival_time[]" class="form-control">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Дата и время отъезда</label>
+                                <input type="datetime-local" name="departure_time[]" class="form-control">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Номер рейса (если есть)</label>
+                            <input type="text" name="flight_number[]" class="form-control" placeholder="Например: SU 1234">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Название отеля</label>
+                            <input type="text" name="hotel_name[]" class="form-control" placeholder="Название вашего отеля">
+                        </div>
+                    </div>
+                </div>
+                
+                <button type="button" id="add-point" class="btn btn-outline">
+                    + Добавить точку маршрута
+                </button>
+            </div>
+            
+            <div class="form-actions">
+                <a href="/trips" class="btn btn-outline">Отмена</a>
+                <button type="submit" class="btn btn-primary">Сохранить поездку</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    document.getElementById('add-point').addEventListener('click', function() {
+        const container = document.getElementById('points-container');
+        const template = document.querySelector('.point-form');
+        const newPoint = template.cloneNode(true);
+        
+        // Обновляем номер точки
+        const pointNumber = container.querySelectorAll('.point-form').length + 1;
+        newPoint.querySelector('.point-number').textContent = pointNumber;
+        
+        // Очищаем значения
+        const inputs = newPoint.querySelectorAll('input');
+        inputs.forEach(input => input.value = '');
+        
+        // Показываем кнопку удаления
+        newPoint.querySelector('.remove-point').style.display = 'flex';
+        
+        // Добавляем обработчик удаления
+        newPoint.querySelector('.remove-point').addEventListener('click', function() {
+            container.removeChild(newPoint);
+            updatePointNumbers();
+        });
+        
+        container.appendChild(newPoint);
+    });
+    
+    function updatePointNumbers() {
+        const points = document.querySelectorAll('.point-form');
+        points.forEach((point, index) => {
+            point.querySelector('.point-number').textContent = index + 1;
+        });
+    }
+</script>
+{% endblock %}
