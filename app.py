@@ -1,15 +1,37 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, make_response
 import sqlite3
 import bcrypt
-import jwt
-from datetime import datetime, timedelta
-from functools import wraps
-from flask_login import current_user
+from flask_login import current_user, LoginManager, UserMixin, logout_user, login_required
+from flask_login import login_user as flask_login_user
 
 SECRET_KEY = '21831912'
 
 # создание приложения
 app = Flask(__name__, template_folder='html')
+app.secret_key = '21831912'
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+class User(UserMixin):
+    def __init__(self, id, username, email):
+        self.id = id
+        self.username = username
+        self.email = email
+
+    @staticmethod
+    def get(user_id):
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+        conn.close()
+        if not user:
+            return None
+        return User(user['id'], user['username'], user['email'])
+    
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get(user_id)
 
 @app.context_processor
 def inject_user():
@@ -19,19 +41,6 @@ def inject_user():
 @app.route('/')
 def index():
     return render_template('base.html')
-
-# декоратор для проверки авторизации
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'Authorization token is missing'}), 401
-        user_id = verify_token(token)
-        if not user_id:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-        return f(user_id, *args, **kwargs)
-    return decorated_function
 
 # функция для подключения к бд SQLite, бд встроенная, хранится в файле
 def get_db_connection():
@@ -89,18 +98,20 @@ def hash_data(data):
 
 # проверка данных, сравнивает введенные с хэшированными
 def check_data(data, hashed_data):
+    if isinstance(hashed_data, str):
+        hashed_data = hashed_data.encode('utf-8')
     return bcrypt.checkpw(data.encode('utf-8'), hashed_data)
 
 # регистрация пользователя, добавляет его данные в бд
 def register_user(username, email, password):
     conn = get_db_connection()
-    hased_password = hash_data(password) # хэширование пароля перед сохранением
-    conn.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, hased_password))
+    hashed_password = hash_data(password).decode('utf-8') # хэширование пароля перед сохранением
+    conn.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, hashed_password))
     conn.commit()
     conn.close()
 
 # авторизация пользователя
-def login_user(email, password):
+def authenticate_user(email, password):
     conn = get_db_connection()
     # поиск пользователя по почте
     user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
@@ -108,24 +119,6 @@ def login_user(email, password):
     if user and check_data(password, user['password_hash']):
         return user
     return None
-
-#функция для создания токена авторизации
-def create_token(user_id):
-    payload = {
-        'user_id': user_id, # id пользователя, будет храниться в токене
-        'exp': datetime.utcnow() + timedelta(hours=1)
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm='HS256') # кодирование токена
-
-# проверка токена
-def verify_token(token):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
-        return payload['user_id']
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
-        return None
 
 # маршрут для регистрации пользователя
 @app.route('/register', methods=['GET', 'POST']) # GET -отображение формы, POST - обработка данных формы
@@ -152,14 +145,20 @@ def login():
         email = data.get('email')
         password = data.get('password')
         if not email or not password:
-            return jsonify({'error': 'Missind data'}), 400
-        user = login_user(email, password)
-        if user:
-            token = create_token(user['id'])
+            return jsonify({'error': 'Missing data'}), 400
+        user_data = authenticate_user(email, password)
+        if user_data:
+            user = User(user_data['id'], user_data['username'], user_data['email'])
+            flask_login_user(user)
             return redirect(url_for('index'))
         else:
             return render_template('login.html', error='Неверная почта или пароль')
     return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
 
 # создание поездки, добавляет поездку и точки в бд
 def create_trip(user_id, title, start_date, end_date, points):
@@ -183,7 +182,8 @@ point['flight_number'], point['hotel_name']))
 # маршрут для создания поездки, создавать можно если пользователь авторизован
 @app.route('/create_trip', methods=['GET', 'POST'])
 @login_required
-def create_trip_route(user_id):
+def create_trip_route():
+    user_id = current_user.id
     if request.method == 'POST':
         data = request.form
         title = data.get('title')
@@ -215,7 +215,8 @@ def create_trip_route(user_id):
 # получение списка поездок пользователя
 @app.route('/trips', methods=['GET'])
 @login_required
-def get_trips(user_id):
+def get_trips():
+    user_id = current_user.id
     conn = get_db_connection()
     trips = conn.execute('''
         SELECT * FROM trips WHERE user_id = ?
@@ -235,7 +236,8 @@ def get_trips(user_id):
 # получение деталей конкретной поездки
 @app.route('/trips/<int:trip_id>', methods=['GET'])
 @login_required
-def get_trip_details(user_id, trip_id):
+def get_trip_details(trip_id):
+    user_id = current_user.id
     conn = get_db_connection()
     # поиск по id поездки и по id пользователя
     trip = conn.execute('''
@@ -246,7 +248,7 @@ def get_trip_details(user_id, trip_id):
         return jsonify({'error': 'Trip not found or access denied'}), 404
     points = conn.execute('''
         SELECT * FROM trip_points WHERE trip_id = ?
-    ''', (trip_id)).fetchall()
+    ''', (trip_id,)).fetchall()
     conn.close()
     trip_details = {
         'id': trip['id'],
@@ -269,7 +271,8 @@ def get_trip_details(user_id, trip_id):
 # обновление поездки
 @app.route('/trips/<int:trip_id>', methods=['PUT'])
 @login_required
-def update_trip(user_id, trip_id):
+def update_trip(trip_id):
+    user_id = current_user.id
     data = request.get_json()
     title = data.get('title')
     start_date = data.get('start_date')
@@ -293,7 +296,8 @@ def update_trip(user_id, trip_id):
 # удаление поездки
 @app.route('/trips/<int:trip_id>', methods=['DELETE'])
 @login_required
-def delete_trip(user_id, trip_id):
+def delete_trip(trip_id):
+    user_id = current_user.id
     conn = get_db_connection()
     trip = conn.execute('''
         SELECT * FROM trips WHERE id = ? AND user_id = ?
@@ -310,7 +314,8 @@ def delete_trip(user_id, trip_id):
 # поиск поездок
 @app.route('/trips/search', methods=['GET'])
 @login_required
-def search_trips(user_id):
+def search_trips():
+    user_id = current_user.id
     title = request.args.get('title') # параметр поиска по названию
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
@@ -318,16 +323,16 @@ def search_trips(user_id):
     query = 'SELECT * FROM trips WHERE user_id = ?'
     params = [user_id]
     if title:
-        query += 'AND title LIKE ?' # добавление условия поиска по названию
+        query += ' AND title LIKE ?' # добавление условия поиска по названию
         params.append(f'%{title}%')
     if start_date and end_date:
-        query += 'AND start_date >= ? AND end_date <= ?'
+        query += ' AND start_date >= ? AND end_date <= ?'
         params.extend([start_date, end_date])
     elif start_date:
-        query += 'AND start_date >= ?'
+        query += ' AND start_date >= ?'
         params.append(start_date)
     elif end_date:
-        query += 'AND end_date <= ?'
+        query += ' AND end_date <= ?'
         params.append(end_date)
     trips = conn.execute(query, params).fetchall() # выполнение запроса
     conn.close()
