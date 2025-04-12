@@ -3,6 +3,7 @@ import sqlite3
 import bcrypt
 from flask_login import current_user, LoginManager, UserMixin, logout_user, login_required
 from flask_login import login_user as flask_login_user
+import csv
 
 SECRET_KEY = '21831912'
 
@@ -10,10 +11,12 @@ SECRET_KEY = '21831912'
 app = Flask(__name__, template_folder='html')
 app.secret_key = '21831912'
 
+# инициализация flask-login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# класс пользователя
 class User(UserMixin):
     def __init__(self, id, username, email):
         self.id = id
@@ -22,17 +25,19 @@ class User(UserMixin):
 
     @staticmethod
     def get(user_id):
-        conn = get_db_connection()
+        conn = get_db_connection() # получение пользователя по id из бд
         user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
         conn.close()
         if not user:
             return None
         return User(user['id'], user['username'], user['email'])
     
+# для загрузки пользователя из сесии
 @login_manager.user_loader
 def load_user(user_id):
     return User.get(user_id)
 
+# передает current_user в шаблоны автоматически
 @app.context_processor
 def inject_user():
     return dict(current_user=current_user)
@@ -84,8 +89,23 @@ def init_db():
             arrival_time DATETIME,
             departure_time DATETIME,
             flight_number TEXT,
+            departure_icao TEXT,
+            arrival_icao TEXT,
             hotel_name TEXT,
             FOREIGN KEY (trip_id) REFERENCES trips (id)
+        )
+    ''')
+    # таблица аэропортов
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS airports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            country_code TEXT,
+            region_name TEXT,
+            iata TEXT,
+            icao TEXT UNIQUE,
+            airport TEXT,
+            latitude REAL,
+            longitude REAL
         )
     ''')
     conn.commit() # сохранение изменений в бд
@@ -155,13 +175,15 @@ def login():
             return render_template('login.html', error='Неверная почта или пароль')
     return render_template('login.html')
 
+# выход из аккаунта
 @app.route('/logout')
 def logout():
     logout_user()
     return redirect(url_for('index'))
 
 # создание поездки, добавляет поездку и точки в бд
-def create_trip(user_id, title, start_date, end_date, points):
+def create_trip(title, start_date, end_date, points):
+    user_id = current_user.id
     conn = get_db_connection()
     cursor = conn.execute('''
         INSERT INTO trips (user_id, title, start_date, end_date)
@@ -172,10 +194,10 @@ def create_trip(user_id, title, start_date, end_date, points):
     for point in points:
         conn.execute('''
             INSERT INTO trip_points (trip_id, location, arrival_time, departure_time,
-flight_number, hotel_name)
-            VALUES (?, ?, ?, ?, ?, ?)
+flight_number, departure_icao, arrival_icao, hotel_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (trip_id, point['location'], point['arrival_time'], point['departure_time'],
-point['flight_number'], point['hotel_name']))
+point['flight_number'], point['departure_icao'], point['arrival_icao'], point['hotel_name']))
     conn.commit()
     conn.close()
 
@@ -184,27 +206,34 @@ point['flight_number'], point['hotel_name']))
 @login_required
 def create_trip_route():
     user_id = current_user.id
+    conn = get_db_connection()
+    icao_list = conn.execute('SELECT icao, airport FROM airports LIMIT 100').fetchall()
+    conn.close()
     if request.method == 'POST':
         data = request.form
         title = data.get('title')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
+        departure_icao = data.get('departure_icao')
+        arrival_icao = data.get('arrival_icao')
         locations = data.getlist('locations[]')
         arrival_times = data.getlist('arrival_time[]')
         departure_times = data.getlist('departure_time[]')
         flight_numbers = data.getlist('flight_number[]')
         hotel_names = data.getlist('hotel_name[]')
-        if not title or not start_date or not end_date or not locations:
+        if not title or not start_date or not end_date or not locations or not departure_icao or not arrival_icao:
             return jsonify({'error': 'Missing data'}), 400
         try:
             # создание поездки и точек маршрута
-            create_trip(user_id, title, start_date, end_date, [
+            create_trip(title, start_date, end_date, [
                 {
                     'location': locations[i],
                     'arrival_time': arrival_times[i],
                     'departure_time': departure_times[i],
                     'flight_number': flight_numbers[i],
-                    'hotel_name': hotel_names[i]
+                    'hotel_name': hotel_names[i],
+                    'departure_icao': departure_icao,
+                    'arrival_icao': arrival_icao
                 } for i in range(len(locations))
             ])
             return redirect(url_for('index'))
@@ -230,7 +259,6 @@ def get_trips():
             'start_date': trip['start_date'],
             'end_date': trip['end_date']
         })
-    #return jsonify({'trips': trips_list}), 200
     return render_template('trips.html', trips=trips)
 
 # получение деталей конкретной поездки
@@ -263,9 +291,10 @@ def get_trip_details(trip_id):
             'arrival_time': point['arrival_time'],
             'departure_time': point['departure_time'],
             'flight_number': point['flight_number'],
+            'departure_icao': point['departure_icao'],
+            'arrival_icao': point['arrival_icao'],
             'hotel_name': point['hotel_name']
         })
-    #return jsonify(trip_details), 200
     return render_template('trip_details.html', trip=trip, points=points)
 
 # обновление поездки
@@ -345,6 +374,22 @@ def search_trips():
             'end_date': trip['end_date']
         })
     return jsonify({'trips': trips_list}), 200
+
+def import_airports_from_csv(csv_file_path):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    with open(csv_file_path, newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            cursor.execute('''
+                INSERT OR IGNORE INTO airports (country_code, region_name, iata, icao, airport, latitude, longitude)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                row['country_code'], row['region_name'], row['iata'],
+                row['icao'], row['airport'], row['latitude'], row['longitude']
+            ))
+    conn.commit()
+    conn.close()
 
 # запуск приложения
 if __name__ == '__main__':
