@@ -1,43 +1,29 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, make_response
-import sqlite3
-import bcrypt
+import sqlite3 # для бд
+import bcrypt # хэширование паролей
 from flask_login import current_user, LoginManager, UserMixin, logout_user, login_required
 from flask_login import login_user as flask_login_user
 import csv
+import requests
+from datetime import datetime
 
 SECRET_KEY = '21831912'
 
 # создание приложения
 app = Flask(__name__, template_folder='html')
-app.secret_key = '21831912'
+app.secret_key = SECRET_KEY
 
 # инициализация flask-login
-login_manager = LoginManager()
+login_manager = LoginManager() # для авторизации
 login_manager.init_app(app)
-login_manager.login_view = 'login'
-
-# класс пользователя
-class User(UserMixin):
-    def __init__(self, id, username, email):
-        self.id = id
-        self.username = username
-        self.email = email
-
-    @staticmethod
-    def get(user_id):
-        conn = get_db_connection() # получение пользователя по id из бд
-        user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
-        conn.close()
-        if not user:
-            return None
-        return User(user['id'], user['username'], user['email'])
+login_manager.login_view = 'login' # перенаправляет неавторизованных пользователей
     
-# для загрузки пользователя из сесии
+# для загрузки пользователя по user_id
 @login_manager.user_loader
 def load_user(user_id):
     return User.get(user_id)
 
-# передает current_user в шаблоны автоматически
+# возвращает переменные, автоматически доступные во всех html
 @app.context_processor
 def inject_user():
     return dict(current_user=current_user)
@@ -50,7 +36,7 @@ def index():
 # функция для подключения к бд SQLite, бд встроенная, хранится в файле
 def get_db_connection():
     conn = sqlite3.connect('database.db')
-    conn.row_factory = sqlite3.Row #устанавливает формат строк как словарь
+    conn.row_factory = sqlite3.Row #устанавливает формат строк как словарь (обычно кортеж)
     return conn
 
 # закрытие соединения с бд
@@ -60,6 +46,7 @@ def close_db_connection(conn):
 # иницифлизация бд, создает таблицы, если они еще не существуют
 def init_db():
     conn = get_db_connection()
+
     # таблица пользователей
     conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -69,18 +56,20 @@ def init_db():
             password_hash TEXT NOT NULL
         )
     ''')
-    # таблица поездок
+
+    # таблица поездок, user_id ссылается на таблицу users
     conn.execute('''
         CREATE TABLE IF NOT EXISTS trips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL, 
             title TEXT NOT NULL,
             start_date DATETIME,
             end_date DATETIME,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
-    # таблица точек маршрута
+
+    # таблица точек маршрута, trip_id ссылается на таблицу trips
     conn.execute('''
         CREATE TABLE IF NOT EXISTS trip_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +84,7 @@ def init_db():
             FOREIGN KEY (trip_id) REFERENCES trips (id)
         )
     ''')
+
     # таблица аэропортов
     conn.execute('''
         CREATE TABLE IF NOT EXISTS airports (
@@ -108,13 +98,52 @@ def init_db():
             longitude REAL
         )
     ''')
+
+    # таблица стоимости точек маршрута
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS trip_costs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trip_point_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            FOREIGN KEY (trip_point_id) REFERENCES trip_points(id)
+        )
+    ''')
+
+    # таблица для валют и обменных курсов
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS exchange_rates (
+            base_currency TEXT,
+            target_currency TEXT,
+            rate REAL,
+            date TEXT,
+            UNIQUE(base_currency, target_currency)
+        )
+    ''') # UNIQUE - ограничение чтобы избежать дубликатов курсов между одной и той же парой валют
+    
     conn.commit() # сохранение изменений в бд
     conn.close() # закрытие соединения
 
+# класс пользователя
+class User(UserMixin):
+    def __init__(self, id, username, email): # сохранение id, username, email
+        self.id = id
+        self.username = username
+        self.email = email
+
+    @staticmethod
+    def get(user_id):
+        conn = get_db_connection() # получение пользователя по id из бд
+        user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+        conn.close()
+        if not user:
+            return None
+        return User(user['id'], user['username'], user['email'])
+
 # хэширование данных
 def hash_data(data):
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(data.encode('utf-8'), salt)
+    salt = bcrypt.gensalt() # генерация случайной строки, которая добавляется к данным перед хэшированием
+    return bcrypt.hashpw(data.encode('utf-8'), salt) # будет храниться в бд вместо оригинальной
 
 # проверка данных, сравнивает введенные с хэшированными
 def check_data(data, hashed_data):
@@ -122,11 +151,14 @@ def check_data(data, hashed_data):
         hashed_data = hashed_data.encode('utf-8')
     return bcrypt.checkpw(data.encode('utf-8'), hashed_data)
 
-# регистрация пользователя, добавляет его данные в бд
+# регистрация пользователя, проверяет уникальность email, добавляет его данные в бд
 def register_user(username, email, password):
     conn = get_db_connection()
+    existing = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone() # проверка существует ли такой пользователь
+    if existing:
+        raise ValueError('Пользователь с такой почтой уже существует')
     hashed_password = hash_data(password).decode('utf-8') # хэширование пароля перед сохранением
-    conn.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, hashed_password))
+    conn.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, hashed_password)) # добавление нового пользователя в бд
     conn.commit()
     conn.close()
 
@@ -134,7 +166,7 @@ def register_user(username, email, password):
 def authenticate_user(email, password):
     conn = get_db_connection()
     # поиск пользователя по почте
-    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone() # запрашивается по email из бд
     conn.close()
     if user and check_data(password, user['password_hash']):
         return user
@@ -157,16 +189,17 @@ def register():
             return jsonify({'error': str(e)}), 500
     return render_template('register.html') # отображение формы регистрации
 
-# маршрут для авторизации
+# вход в систему
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         data = request.form
+        # получение email и пароля, отправленных пользователем
         email = data.get('email')
         password = data.get('password')
         if not email or not password:
             return jsonify({'error': 'Missing data'}), 400
-        user_data = authenticate_user(email, password)
+        user_data = authenticate_user(email, password) # аутентификация пользователя
         if user_data:
             user = User(user_data['id'], user_data['username'], user_data['email'])
             flask_login_user(user)
@@ -175,15 +208,48 @@ def login():
             return render_template('login.html', error='Неверная почта или пароль')
     return render_template('login.html')
 
-# выход из аккаунта
+# выход из аккаунта, поддерживает только GET
 @app.route('/logout')
 def logout():
-    logout_user()
+    logout_user() # удаляет пользователя из сессии, очищает current_user
     return redirect(url_for('index'))
 
-# создание поездки, добавляет поездку и точки в бд
+# получает и сохраняет обменные курсы
+def fetch_and_store_exchange_rates(base_currency='USD'):
+    url = f'https://open.er-api.com/v6/latest/{base_currency}'
+    response = requests.get(url)
+    data = response.json()
+    rates = data.get('rates', {})
+    date = data.get('time_last_update_utc', datetime.utcnow().isoformat()) # получение даты обновления курсов, если ее нет используется текущаю в формате iso
+    conn = get_db_connection()
+    for target_currency, rate in rates.items():
+        conn.execute('''
+            INSERT OR REPLACE INTO exchange_rates (base_currency, target_currency, rate, date)
+            VALUES (?, ?, ?, ?)
+        ''', (base_currency, target_currency, rate, date))
+    conn.commit()
+    conn.close()
+
+# конвертация валют
+def convert_currency(amount, from_currency, to_currency):
+    from_currency = from_currency.upper()
+    to_currency = to_currency.upper()
+    conn = get_db_connection()
+    if from_currency == to_currency:
+        return amount
+    # получение курса валюты from_currency 
+    from_rate = conn.execute('SELECT rate FROM exchange_rates WHERE base_currency = ? AND target_currency = ?', ('USD', from_currency)).fetchone()
+    to_rate = conn.execute('SELECT rate FROM exchange_rates WHERE base_currency = ? AND target_currency = ?', ('USD', to_currency)).fetchone()
+    conn.close()
+    if not from_rate or not to_rate:
+        raise ValueError('Не удалось найти курсы валют для конвертации')
+    usd_amount = amount / from_rate['rate'] # перевод суммы в USD
+    final_amount = usd_amount * to_rate['rate'] # из USD в to_currency
+    return final_amount
+
+# создание поездки, схраняет точки маршрута и их стоимость, добавляет поездку и точки в бд
 def create_trip(title, start_date, end_date, points):
-    user_id = current_user.id
+    user_id = current_user.id # получение id авторизованного пользователя
     conn = get_db_connection()
     cursor = conn.execute('''
         INSERT INTO trips (user_id, title, start_date, end_date)
@@ -192,12 +258,18 @@ def create_trip(title, start_date, end_date, points):
     trip_id = cursor.lastrowid # получение id поездки
     # добавление точек маршрута в таблицу
     for point in points:
-        conn.execute('''
+        point_cursor = conn.execute('''
             INSERT INTO trip_points (trip_id, location, arrival_time, departure_time,
 flight_number, departure_icao, arrival_icao, hotel_name)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (trip_id, point['location'], point['arrival_time'], point['departure_time'],
 point['flight_number'], point['departure_icao'], point['arrival_icao'], point['hotel_name']))
+        trip_point_id = point_cursor.lastrowid
+        if 'cost_amount' in point and 'cost_currency' in point:
+            conn.execute('''
+                INSERT INTO trip_costs (trip_point_id, amount, currency)
+                VALUES (?, ?, ?)
+            ''', (trip_point_id, point['cost_amount'], point['cost_currency']))
     conn.commit()
     conn.close()
 
@@ -207,7 +279,7 @@ point['flight_number'], point['departure_icao'], point['arrival_icao'], point['h
 def create_trip_route():
     user_id = current_user.id
     conn = get_db_connection()
-    icao_list = conn.execute('SELECT icao, airport FROM airports LIMIT 100').fetchall()
+    icao_list = conn.execute('SELECT icao, airport FROM airports LIMIT 100').fetchall() # аэропорты в выпадающем списке в форме
     conn.close()
     if request.method == 'POST':
         data = request.form
@@ -221,6 +293,8 @@ def create_trip_route():
         departure_times = data.getlist('departure_time[]')
         flight_numbers = data.getlist('flight_number[]')
         hotel_names = data.getlist('hotel_name[]')
+        cost_amounts = data.getlist('cost_amount[]')
+        cost_currencies = data.getlist('cost_currency[]')
         if not title or not start_date or not end_date or not locations or not departure_icao or not arrival_icao:
             return jsonify({'error': 'Missing data'}), 400
         try:
@@ -233,17 +307,19 @@ def create_trip_route():
                     'flight_number': flight_numbers[i],
                     'hotel_name': hotel_names[i],
                     'departure_icao': departure_icao,
-                    'arrival_icao': arrival_icao
+                    'arrival_icao': arrival_icao,
+                    'cost_amount': float(cost_amounts[i]) if cost_amounts[i] else 0,
+                    'cost_currency': cost_currencies[i] if cost_currencies[i] else 'USD'
                 } for i in range(len(locations))
             ])
             return redirect(url_for('index'))
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    return render_template('create_trip.html') # отображение формы создания поездки
+    return render_template('create_trip.html', icao_list=icao_list) # отображение формы создания поездки
 
 # получение списка поездок пользователя
 @app.route('/trips', methods=['GET'])
-@login_required
+@login_required # защищает от неавторизованного доступа
 def get_trips():
     user_id = current_user.id
     conn = get_db_connection()
@@ -259,7 +335,7 @@ def get_trips():
             'start_date': trip['start_date'],
             'end_date': trip['end_date']
         })
-    return render_template('trips.html', trips=trips)
+    return render_template('trips.html', trips_list=trips_list)
 
 # получение деталей конкретной поездки
 @app.route('/trips/<int:trip_id>', methods=['GET'])
@@ -277,7 +353,19 @@ def get_trip_details(trip_id):
     points = conn.execute('''
         SELECT * FROM trip_points WHERE trip_id = ?
     ''', (trip_id,)).fetchall()
+    # рассчет общей стоимости поездки
+    total_cost = 0
+    selected_currency = 'USD'
+    for point in points:
+        cost = conn.execute('''
+            SELECT amount, currency FROM trip_costs WHERE trip_point_id = ?
+        ''', (point['id'],)).fetchall()
+        for c in cost:
+            converted = convert_currency(c['amount'], c['currency'], selected_currency)
+            if converted:
+                total_cost += converted
     conn.close()
+    # формирование данных для html
     trip_details = {
         'id': trip['id'],
         'title': trip['title'],
@@ -295,13 +383,14 @@ def get_trip_details(trip_id):
             'arrival_icao': point['arrival_icao'],
             'hotel_name': point['hotel_name']
         })
-    return render_template('trip_details.html', trip=trip, points=points)
+    return render_template('trip_details.html', trip=trip, points=points, total_cost=total_cost)
 
 # обновление поездки
 @app.route('/trips/<int:trip_id>', methods=['PUT'])
 @login_required
 def update_trip(trip_id):
     user_id = current_user.id
+    # извлечение параметров для обновления поездки
     data = request.get_json()
     title = data.get('title')
     start_date = data.get('start_date')
@@ -334,7 +423,7 @@ def delete_trip(trip_id):
     if not trip:
         conn.close()
         return jsonify({'error': 'Trip not found or access denied'}), 404
-    conn.execute('DELETE FROM trip_points WHERE trip_id = ?', (trip_id))
+    conn.execute('DELETE FROM trip_points WHERE trip_id = ?', (trip_id)) # удаление сначала данных, потом самой поездки
     conn.execute('DELETE FROM trips WHERE id = ?', (trip_id))
     conn.commit()
     conn.close()
@@ -375,6 +464,7 @@ def search_trips():
         })
     return jsonify({'trips': trips_list}), 200
 
+# импорт данных об аэропортах из csv в бд
 def import_airports_from_csv(csv_file_path):
     conn = get_db_connection()
     cursor = conn.cursor()
