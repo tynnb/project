@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, make_response
+from flask import Flask, request, jsonify, render_template, redirect, url_for
 import sqlite3 # для бд
 import bcrypt # хэширование паролей
 from flask_login import current_user, LoginManager, UserMixin, logout_user, login_required
@@ -120,7 +120,7 @@ def init_db():
             UNIQUE(base_currency, target_currency)
         )
     ''') # UNIQUE - ограничение чтобы избежать дубликатов курсов между одной и той же парой валют
-    
+
     conn.commit() # сохранение изменений в бд
     conn.close() # закрытие соединения
 
