@@ -8,6 +8,7 @@ import requests
 from datetime import datetime
 
 SECRET_KEY = '21831912'
+TIMEZONEDB_API_KEY = '51430042'
 
 # создание приложения
 app = Flask(__name__, template_folder='html')
@@ -17,6 +18,10 @@ app.secret_key = SECRET_KEY
 login_manager = LoginManager() # для авторизации
 login_manager.init_app(app)
 login_manager.login_view = 'login' # перенаправляет неавторизованных пользователей
+
+@app.before_first_request
+def initialize_exchange_rates():
+    fetch_and_store_exchange_rates()
     
 # для загрузки пользователя по user_id
 @login_manager.user_loader
@@ -117,6 +122,7 @@ def init_db():
             target_currency TEXT,
             rate REAL,
             date TEXT,
+            fetched_at DATE;
             UNIQUE(base_currency, target_currency)
         )
     ''') # UNIQUE - ограничение чтобы избежать дубликатов курсов между одной и той же парой валют
@@ -216,6 +222,11 @@ def logout():
 
 # получает и сохраняет обменные курсы
 def fetch_and_store_exchange_rates(base_currency='USD'):
+    conn = get_db_connection()
+    today = date.today().isformat()
+    existing = conn.execute('SELECT 1 FROM exchange_rates WHERE fetched_at = ? LIMIT 1', (today,)).fetchone()
+    if existing:
+        return
     url = f'https://open.er-api.com/v6/latest/{base_currency}'
     response = requests.get(url)
     data = response.json()
@@ -224,9 +235,9 @@ def fetch_and_store_exchange_rates(base_currency='USD'):
     conn = get_db_connection()
     for target_currency, rate in rates.items():
         conn.execute('''
-            INSERT OR REPLACE INTO exchange_rates (base_currency, target_currency, rate, date)
+            INSERT OR REPLACE INTO exchange_rates (base_currency, target_currency, rate, fetched_at)
             VALUES (?, ?, ?, ?)
-        ''', (base_currency, target_currency, rate, date))
+        ''', (base_currency, target_currency, rate, today))
     conn.commit()
     conn.close()
 
@@ -256,6 +267,7 @@ def create_trip(title, start_date, end_date, points):
         VALUES (?, ?, ?, ?)
     ''', (user_id, title, start_date, end_date))
     trip_id = cursor.lastrowid # получение id поездки
+    fetch_and_store_exchange_rates()
     # добавление точек маршрута в таблицу
     for point in points:
         point_cursor = conn.execute('''
@@ -280,6 +292,7 @@ def create_trip_route():
     user_id = current_user.id
     conn = get_db_connection()
     icao_list = conn.execute('SELECT icao, airport FROM airports LIMIT 100').fetchall() # аэропорты в выпадающем списке в форме
+    currencies = conn.execute('SELECT DISTINCT target_currency FROM exchange_rates').fetchall()
     conn.close()
     if request.method == 'POST':
         data = request.form
@@ -315,7 +328,7 @@ def create_trip_route():
             return redirect(url_for('index'))
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    return render_template('create_trip.html', icao_list=icao_list) # отображение формы создания поездки
+    return render_template('create_trip.html', icao_list=icao_list, availble_currencies=[c['target_currency'] for c in currencies]) # отображение формы создания поездки
 
 # получение списка поездок пользователя
 @app.route('/trips', methods=['GET'])
@@ -342,6 +355,7 @@ def get_trips():
 @login_required
 def get_trip_details(trip_id):
     user_id = current_user.id
+    selected_currency = request.args.get('currency', 'USD')
     conn = get_db_connection()
     # поиск по id поездки и по id пользователя
     trip = conn.execute('''
@@ -350,40 +364,56 @@ def get_trip_details(trip_id):
     if not trip:
         conn.close()
         return jsonify({'error': 'Trip not found or access denied'}), 404
+    fetch_and_store_exchange_rates()
     points = conn.execute('''
         SELECT * FROM trip_points WHERE trip_id = ?
     ''', (trip_id,)).fetchall()
     # рассчет общей стоимости поездки
     total_cost = 0
-    selected_currency = 'USD'
+    points_details = []
+    #selected_currency = 'USD'
     for point in points:
-        cost = conn.execute('''
+        costs = conn.execute('''
             SELECT amount, currency FROM trip_costs WHERE trip_point_id = ?
         ''', (point['id'],)).fetchall()
-        for c in cost:
-            converted = convert_currency(c['amount'], c['currency'], selected_currency)
-            if converted:
-                total_cost += converted
-    conn.close()
-    # формирование данных для html
-    trip_details = {
-        'id': trip['id'],
-        'title': trip['title'],
-        'start_date': trip['start_date'],
-        'end_date': trip['end_date'],
-        'points': []
-    }
-    for point in points:
-        trip_details['points'].append({
+        point_costs = []
+        point_total = 0
+        for cost in costs:
+            try:
+                converted = convert_currency(cost['amount'], cost['currency'], selected_currency)
+                point_total += converted
+                point_costs.append({
+                    'original_amount': cost['amount'],
+                    'original_currency': cost['currency'],
+                    'converted_amount': round(converted, 2),
+                    'converted_currency': selected_currency
+                })
+            except ValueError as e:
+                print(f'Error converting currency: {e}')
+        total_cost += point_total
+        points_details.append({
+            'id': point['id'],
             'location': point['location'],
             'arrival_time': point['arrival_time'],
             'departure_time': point['departure_time'],
             'flight_number': point['flight_number'],
             'departure_icao': point['departure_icao'],
             'arrival_icao': point['arrival_icao'],
-            'hotel_name': point['hotel_name']
+            'hotel_name': point['hotel_name'],
+            'costs': point_costs,
+            'point_total': round(point_total, 2)
         })
-    return render_template('trip_details.html', trip=trip, points=points, total_cost=total_cost)
+    currencies = conn.execute('''
+        SELECT DISTINCT target_currency FROM exchange_rates
+        WHERE base_currency = 'USD'
+    ''').fetchall()
+    conn.close()
+    return render_template('trip_details.html',
+                           trip=trip,
+                           points=points_details,
+                           total_cost=round(total_cost, 2),
+                           selected_currency=selected_currency,
+                           availble_currencies=[c['target_currency'] for c in currencies])
 
 # обновление поездки
 @app.route('/trips/<int:trip_id>', methods=['PUT'])
@@ -480,6 +510,34 @@ def import_airports_from_csv(csv_file_path):
             ))
     conn.commit()
     conn.close()
+
+def get_timezone_by_city(city_name):
+    geo_url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        'q': city_name,
+        'format': 'json',
+        'limit': 1
+    }
+    geo_responce = request.get(geo_url, params=params)
+    geo_data = geo_responce.json()
+    if not geo_data:
+        return None
+    lat = geo_data[0]['lat']
+    lon = geo_data[0]['lon']
+    tz_url = "http://api.timezonedb.com/v2.1/get-time-zone"
+    tz_params = {
+        'key': TIMEZONEDB_API_KEY,
+        'format': 'json',
+        'by': 'position',
+        'lat': lat,
+        'lng': lon
+    }
+    tz_responce = request.get(tz_url, params=tz_params)
+    tz_data = tz_responce.json()
+    if tz_data['status'] == 'OK':
+        return tz_data['zoneName']
+    else:
+        return None
 
 # запуск приложения
 if __name__ == '__main__':
