@@ -89,7 +89,15 @@
         text-decoration: underline;
     }
     
-    /* Адаптивность */
+    .alert-danger {
+        background: rgba(229, 57, 53, 0.1);
+        color: var(--danger);
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1.5rem;
+        border: 1px solid var(--danger);
+    }
+
     @media (max-width: 768px) {
         .auth-card {
             padding: 2rem 1.5rem;
@@ -108,9 +116,13 @@
         <h1 class="auth-title">Вход в аккаунт</h1>
         <p class="auth-description">Войдите, чтобы продолжить планирование</p>
         
-        {% if error %}
-            <div class="alert alert-danger">{{ error }}</div>
-        {% endif %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
         
         <form method="POST" action="/login">
             <div class="form-group">
