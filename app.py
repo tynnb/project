@@ -11,7 +11,7 @@ from flask_login import ( # для аутентификации
 from flask_login import login_user as flask_login_user # функция входа пользователя
 import csv
 import requests # для запросов к внешним API
-from datetime import datetime # для даты и времени
+from datetime import datetime, date # для даты и времени
 import pytz # для часовых поясов
 from pytz import timezone as pytz_timezone
 
@@ -258,7 +258,7 @@ def fetch_and_store_exchange_rates(base_currency="USD"):
     response = requests.get(url)
     data = response.json()
     rates = data.get("rates", {})
-    date = data.get("time_last_update_utc", datetime.utcnow().isoformat())
+    update_date = data.get("time_last_update_utc", datetime.utcnow().isoformat())
     for target_currency, rate in rates.items():
         conn.execute(
             """
@@ -428,7 +428,7 @@ def create_trip_route():
     return render_template(
         "create_trip.html",
         icao_list=icao_list,
-        availble_currencies=[c["target_currency"] for c in currencies],
+        available_currencies=[c["target_currency"] for c in currencies],
     )
 
 # отображает список поездок текущего пользователя
@@ -543,7 +543,7 @@ def get_trip_details(trip_id):
             WHERE base_currency = 'USD'
         """
         ).fetchall()
-        avalible_timezones = list(
+        available_timezones = list(
             set([p["point_timezone"] for p in points if p["point_timezone"]])
         )
         return render_template(
@@ -552,8 +552,8 @@ def get_trip_details(trip_id):
             points=points_details,
             total_cost=round(total_cost, 2),
             selected_currency=selected_currency,
-            availble_currencies=[c["target_currency"] for c in currencies],
-            avalible_timezones=avalible_timezones,
+            available_currencies=[c["target_currency"] for c in currencies],
+            available_timezones=available_timezones,
             selected_timezone=timezone,
         )
     except Exception as e:
@@ -610,8 +610,8 @@ def delete_trip(trip_id):
         conn.close()
         return jsonify({"error": "Trip not found or access denied"}), 404
     # удаление сначала данных, потом поездки
-    conn.execute("DELETE FROM trip_points WHERE trip_id = ?", (trip_id))
-    conn.execute("DELETE FROM trips WHERE id = ?", (trip_id))
+    conn.execute("DELETE FROM trip_points WHERE trip_id = ?", (trip_id,))
+    conn.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
     conn.commit()
     conn.close()
     return jsonify({"message": "Trip deleted successfully"}), 200
