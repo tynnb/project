@@ -28,7 +28,7 @@ login_manager.init_app(app) # связывается с приложением
 login_manager.login_view = "login"
 
 # декоратор для выполнения функции перед первым запросом
-@app.before_first_request
+@app.before_request
 def initialize_exchange_rates():
     fetch_and_store_exchange_rates() # инициализация курсов валют при первом запросе
 
@@ -60,6 +60,11 @@ def close_db_connection(conn):
 # инициализация бд, создание таблиц, если они не существуют
 def init_db():
     conn = get_db_connection()
+    try:
+        conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
+        conn.commit()
     # таблица пользователей
     conn.execute(
         """
@@ -246,29 +251,43 @@ def logout():
 
 # полуяение текущих курсов валют и сохранение их в бд (обновление раз в день)
 def fetch_and_store_exchange_rates(base_currency="USD"):
-    conn = get_db_connection()
-    today = date.today().isoformat() # получение текущей даты
+    conn = None
+    try:
+        conn = get_db_connection()
+        today = date.today().isoformat() # получение текущей даты
+        try:
+            conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
+            conn.commit()
     # проверка, обновлялись ли курсы сегодня
-    existing = conn.execute(
-        "SELECT 1 FROM exchange_rates WHERE fetched_at = ? LIMIT 1", (today,)
-    ).fetchone()
-    if existing:
-        return
-    url = f"https://open.er-api.com/v6/latest/{base_currency}"
-    response = requests.get(url)
-    data = response.json()
-    rates = data.get("rates", {})
-    update_date = data.get("time_last_update_utc", datetime.utcnow().isoformat())
-    for target_currency, rate in rates.items():
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO exchange_rates (base_currency, target_currency, rate, fetched_at)
-            VALUES (?, ?, ?, ?)
-        """,
-            (base_currency, target_currency, rate, today),
-        )
-    conn.commit()
-    conn.close()
+        existing = conn.execute(
+            "SELECT 1 FROM exchange_rates WHERE fetched_at = ? LIMIT 1", (today,)
+        ).fetchone()
+        if existing:
+            return
+        url = f"https://open.er-api.com/v6/latest/{base_currency}"
+        response = requests.get(url)
+        data = response.json()
+        rates = data.get("rates", {})
+        update_date = data.get("time_last_update_utc", datetime.utcnow().isoformat())
+        for target_currency, rate in rates.items():
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO exchange_rates (base_currency, target_currency, rate, fetched_at)
+                VALUES (?, ?, ?, ?)
+            """,
+                (base_currency, target_currency, rate, today),
+            )
+    except requests.exceptions.RequestException as e:
+        print(f"Ошибка при запросе к API курсов валют: {e}")
+    except sqlite3.Error as e:
+        print(f"Ошибка базы данных: {e}")
+    except Exception as e:
+        print(f"Неожиданная ошибка: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 # перевод из одной валюты в другую
 def convert_currency(amount, from_currency, to_currency):
@@ -520,7 +539,7 @@ def get_trip_details(trip_id):
             departure_local = (
                 utc_to_local(point["utc_departure"], display_timezone)
                 if point.get("utc_departure")
-                else point["utc_departure"]
+                else point["departure_time"]
             )
             points_details.append(
                 {
