@@ -60,11 +60,6 @@ def close_db_connection(conn):
 # инициализация бд, создание таблиц, если они не существуют
 def init_db():
     conn = get_db_connection()
-    try:
-        conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
-        conn.commit()
     # таблица пользователей
     conn.execute(
         """
@@ -151,6 +146,11 @@ def init_db():
         )
     """
     )
+    try:
+        conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
+        conn.commit()
     conn.commit()
     conn.close()
 
