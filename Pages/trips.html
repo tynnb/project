@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Мои поездки | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Все оригинальные стили */
+    .page-header { ... }
+    .trips-grid { ... }
+    /* ... остальные стили ... */
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1 class="page-title">Мои поездки</h1>
+        <div class="header-actions">
+            <a href="/create_trip" class="btn btn-primary">+ Новая поездка</a>
+            <form action="/trips/search" method="GET" class="search-form">
+                <input type="text" name="title" placeholder="Поиск...">
+                <input type="date" name="start_date">
+                <input type="date" name="end_date">
+                <button type="submit" class="btn btn-outline">Найти</button>
+            </form>
+        </div>
+    </div>
+
+    {% if trips_list %}
+    <div class="trips-grid">
+        {% for trip in trips_list %}
+        <div class="trip-card">
+            <div class="trip-header" style="background: {% cycle '#5E35B1', '#00ACC1', '#FF7043' %}">
+                <h3 class="trip-title">{{ trip.title }}</h3>
+                <div class="trip-meta">
+                    <small>{{ trip.base_currency }}</small>
+                    <small>{{ trip.timezone }}</small>
+                </div>
+            </div>
+            <div class="trip-body">
+                <div class="trip-actions">
+                    <a href="/trips/{{ trip.id }}" class="btn btn-outline">Подробнее</a>
+                    <form action="/trips/{{ trip.id }}" method="POST">
+                        <input type="hidden" name="_method" value="DELETE">
+                        <button type="submit" class="btn btn-danger">Удалить</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <!-- Сообщение о пустом состоянии -->
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
