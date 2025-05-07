@@ -19,7 +19,7 @@ SECRET_KEY = "21831912"
 TIMEZONEDB_API_KEY = "51430042"
 
 # создание экземпляра приложения
-app = Flask(__name__, template_folder="html")
+app = Flask(__name__, template_folder="Ppr Final!")
 app.secret_key = SECRET_KEY
 
 # инициализация flask-login
