@@ -398,6 +398,8 @@ def create_trip_route():
         "SELECT DISTINCT target_currency FROM exchange_rates"
     ).fetchall()
     conn.close()
+    if request.method == "GET":
+        return render_template("create_trip.html", icao_list=icao_list, available_=[c['target_currency'] for c in currencies])
     # создание поездки
     if request.method == "POST":
         data = request.form
@@ -412,9 +414,11 @@ def create_trip_route():
         departure_times = data.getlist("departure_time[]")
         flight_numbers = data.getlist("flight_number[]")
         hotel_names = data.getlist("hotel_name[]")
-        cost_amounts = data.getlist("cost_amount[]")
+        departure_icao = data.getlist("departure_icao[]")
+        arrival_icao = data.getlist("arrival_icao[]")     
+        cost_amounts = data.getlist("cost_amount[]")      
         cost_currencies = data.getlist("cost_currency[]")
-        if not all([title, start_date, end_date, departure_icao, arrival_icao]):
+        if not all([title, start_date, end_date]):
             return jsonify({"error": "Missing required trip data"}), 400
         if not locations:
             return jsonify({"error": "At least one location is required"}), 400
@@ -430,12 +434,10 @@ def create_trip_route():
                         "departure_time": departure_times[i],
                         "flight_number": flight_numbers[i],
                         "hotel_name": hotel_names[i],
-                        "departure_icao": departure_icao,
-                        "arrival_icao": arrival_icao,
-                        "cost_amount": float(cost_amounts[i]) if cost_amounts[i] else 0,
-                        "cost_currency": cost_currencies[i]
-                        if cost_currencies[i]
-                        else "USD",
+                        "departure_icao": departure_icao[i] if i < len(departure_icao) else "",
+                        "arrival_icao": arrival_icao[i] if i < len(arrival_icao) else "",
+                        "cost_amount": float(cost_amounts[i]) if cost_amounts[i] and cost_amounts[i] else 0,
+                        "cost_currency": cost_currencies[i] if i <  len(cost_currencies) and cost_currencies[i] else "USD",
                     }
                     for i in range(len(locations))
                 ],
