@@ -231,18 +231,24 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        data = request.form
-        email = data.get("email")
-        password = data.get("password")
-        if not email or not password:
-            return jsonify({"error": "Missing data"}), 400
-        user_data = authenticate_user(email, password)
-        if user_data:
+        try:
+            data = request.form
+            email = data.get("email", "").strip()
+            password = data.get("password", "").strip()
+            if not email or not password:
+                return render_template("login.html", error="Все поля обязательны для заполнения")
+            user_data = authenticate_user(email, password)
+            if not user_data:
+                return render_template("login.html", error="Неверная почта или пароль")
             user = User(user_data["id"], user_data["username"], user_data["email"])
             flask_login_user(user, remember=True)
-            return redirect(url_for("index"))
-        else:
-            return render_template("login.html", error="Неверная почта или пароль")
+            next_page = request.args.get('next')
+            if not next_page or not next_page.startswith('/'):
+                next_page = url_for('index')
+            return redirect(next_page)
+        except Exception as e:
+            print(f"Login error: {str(e)}")
+            return render_template("login.html", error="Произошла ошибка при входе")
     return render_template("login.html")
 
 # выход из системы
