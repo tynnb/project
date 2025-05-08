@@ -131,7 +131,7 @@ def init_db():
             trip_point_id INTEGER NOT NULL,
             amount REAL NOT NULL,
             currency TEXT NOT NULL,
-            FOREIGN KEY (trip_point_id) REFERENCES trip_points(id)
+            FOREIGN KEY (trip_point_id) REFERENCES trip_points(id) ON DELETE CASCADE
         )
     """
     )
@@ -154,6 +154,7 @@ def init_db():
         conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
         conn.commit()
     conn.commit()
+    import_airports_from_csv("iata-icao.csv")
     conn.close()
 
 # класс пользователя для работы с flask-login
@@ -260,7 +261,7 @@ def logout():
 # полуяение текущих курсов валют и сохранение их в бд (обновление раз в день)
 def fetch_and_store_exchange_rates(base_currency="USD"):
     try:
-        with get_db_connection() as conn:  # Используем контекстный менеджер для автоматического закрытия
+        with get_db_connection() as conn:
             # Проверяем и добавляем колонку fetched_at если её нет
             try:
                 conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
@@ -268,7 +269,7 @@ def fetch_and_store_exchange_rates(base_currency="USD"):
                 conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
                 conn.commit()
             today = date.today().isoformat()
-            # Добавляем базовую валюту с курсом 1.0 если её нет
+            # Добавляем базовую валюту
             conn.execute(
                 "INSERT OR IGNORE INTO exchange_rates (base_currency, target_currency, rate, fetched_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -280,18 +281,29 @@ def fetch_and_store_exchange_rates(base_currency="USD"):
                 (base_currency, today)
             ).fetchone()
             if existing:
-                return  # Курсы уже обновлены сегодня
+                print("Rates already updated today")
+                return True
             # Получаем данные от API
             try:
                 url = f"https://open.er-api.com/v6/latest/{base_currency}"
-                response = requests.get(url, timeout=10)  # Добавляем таймаут
-                response.raise_for_status()  # Проверяем статус ответа
+                print(f"Fetching rates from: {url}")
+                response = requests.get(url, timeout=15)
+                if response.status_code != 200:
+                    print(f"API request failed with status {response.status_code}")
+                    return False
+                response.raise_for_status()
                 data = response.json()
                 if data.get("result") != "success":
-                    raise ValueError(f"API returned error: {data.get('error-type', 'unknown')}")
+                    error_msg = data.get('error-type', 'unknown error')
+                    print(f"API returned error: {error_msg}")
+                    return False
                 rates = data.get("rates", {})
-                # Обновляем курсы в транзакции
-                with conn:  # Это обеспечивает автоматический commit/rollback
+                if not rates:
+                    print("No rates received from API")
+                    return False
+                # Начинаем транзакцию
+                conn.execute("BEGIN TRANSACTION")
+                try:
                     for target_currency, rate in rates.items():
                         conn.execute(
                             "INSERT OR REPLACE INTO exchange_rates "
@@ -299,18 +311,19 @@ def fetch_and_store_exchange_rates(base_currency="USD"):
                             "VALUES (?, ?, ?, ?)",
                             (base_currency, target_currency, rate, today)
                         )
+                    conn.commit()
+                    print(f"Successfully updated {len(rates)} rates")
+                    return True
+                except sqlite3.Error as e:
+                    conn.rollback()
+                    print(f"Database error during update: {e}")
+                    return False
             except requests.exceptions.RequestException as e:
-                print(f"Ошибка при запросе к API курсов валют: {e}")
-                raise
-            except ValueError as e:
-                print(f"Ошибка данных от API: {e}")
-                raise
-    except sqlite3.Error as e:
-        print(f"Ошибка базы данных: {e}")
-        raise
+                print(f"Request to API failed: {e}")
+                return False
     except Exception as e:
-        print(f"Неожиданная ошибка: {e}")
-        raise
+        print(f"Unexpected error: {e}")
+        return False
 
 # перевод из одной валюты в другую
 def convert_currency(amount, from_currency, to_currency):
@@ -339,37 +352,50 @@ def convert_currency(amount, from_currency, to_currency):
 # создание новой поездки
 def create_trip(title, start_date, end_date, points, base_currency="USD"):
     user_id = current_user.id
-    fetch_and_store_exchange_rates()
     conn = get_db_connection()
     try:
         if not points:
             raise ValueError("Не указаны точки маршрута")
-        trip_timezone = get_timezone_by_city(points[0]["location"]) if points else "UTC" # определение временной зоны
+        # Определение временной зоны поездки
+        trip_timezone = get_timezone_by_city(points[0]["location"]) if points else "UTC"
+        # Создание поездки
         cursor = conn.execute(
             """
             INSERT INTO trips (user_id, title, start_date, end_date, timezone, base_currency)
             VALUES (?, ?, ?, ?, ?, ?)
-        """,
+            """,
             (user_id, title, start_date, end_date, trip_timezone, base_currency),
         )
-        trip_id = cursor.lastrowid # получение id созданной поездки
-        # обработка точек маршрута
+        trip_id = cursor.lastrowid
+        # Обработка точек маршрута
         for point in points:
-            if not all(
-                key in point for key in ["location", "arrival_time", "departure_time"]
-            ):
-                raise ValueError("Missing required point data")
-            point_timezone = get_timezone_by_city(point["location"]) or trip_timezone # определение временной зоны
-            # конвертация времени в UTC
+            # Валидация обязательных полей
+            if not all(key in point for key in ["location", "arrival_time", "departure_time"]):
+                raise ValueError("Отсутствуют обязательные данные точки")
+            # Валидация ICAO-кодов
+            for icao_type in ["departure_icao", "arrival_icao"]:
+                if point.get(icao_type):
+                    if not conn.execute("SELECT 1 FROM airports WHERE icao = ?", (point[icao_type],)).fetchone():
+                        raise ValueError(f"Неизвестный код аэропорта: {point[icao_type]}")
+            # Валидация времени
+            arrival = datetime.strptime(point["arrival_time"], '%Y-%m-%d %H:%M')
+            departure = datetime.strptime(point["departure_time"], '%Y-%m-%d %H:%M')
+            if arrival >= departure:
+                raise ValueError("Время прибытия должно быть раньше времени отъезда")
+            # Определение временной зоны точки
+            point_timezone = point.get("timezone") or get_timezone_by_city(point["location"]) or trip_timezone
+            # Конвертация времени в UTC
             utc_arrival = local_to_utc(point["arrival_time"], point_timezone)
             utc_departure = local_to_utc(point["departure_time"], point_timezone)
-            # создание точки
+            # Сохранение точки
             point_cursor = conn.execute(
                 """
-                INSERT INTO trip_points (trip_id, location, arrival_time, departure_time,
-                timezone, utc_arrival, utc_departure, flight_number, departure_icao, arrival_icao, hotel_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+                INSERT INTO trip_points (
+                    trip_id, location, arrival_time, departure_time,
+                    timezone, utc_arrival, utc_departure,
+                    flight_number, departure_icao, arrival_icao, hotel_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 (
                     trip_id,
                     point["location"],
@@ -378,34 +404,35 @@ def create_trip(title, start_date, end_date, points, base_currency="USD"):
                     point_timezone,
                     utc_arrival,
                     utc_departure,
-                    point["flight_number"],
-                    point["departure_icao"],
-                    point["arrival_icao"],
-                    point["hotel_name"],
+                    point.get("flight_number", ""),
+                    point.get("departure_icao", ""),
+                    point.get("arrival_icao", ""),
+                    point.get("hotel_name", ""),
                 ),
             )
             trip_point_id = point_cursor.lastrowid
-            # обработка расходов (если есть)
+            # Обработка расходов
             if "cost_amount" in point and "cost_currency" in point:
                 if not isinstance(point["cost_amount"], (int, float)):
-                    raise ValueError("Cost amount must be a number")
+                    raise ValueError("Сумма расхода должна быть числом")
                 if not is_valid_currency(point["cost_currency"]):
-                    raise ValueError(f"Invalid currency: {point['cost_currency']}")
+                    raise ValueError(f"Неверная валюта: {point['cost_currency']}")
+                
                 conn.execute(
-                    """
-                    INSERT INTO trip_costs (trip_point_id, amount, currency)
-                    VALUES (?, ?, ?)
-                """,
+                    "INSERT INTO trip_costs (trip_point_id, amount, currency) VALUES (?, ?, ?)",
                     (trip_point_id, point["cost_amount"], point["cost_currency"]),
                 )
         conn.commit()
         return trip_id
+    except ValueError as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 400
     except sqlite3.Error as e:
         conn.rollback()
-        raise ValueError(f"Database error: {str(e)}")
+        return jsonify({"error": f"Ошибка базы данных: {str(e)}"}), 500
     except Exception as e:
         conn.rollback()
-        raise ValueError(f"Error creating trip: {str(e)}")
+        return jsonify({"error": f"Неизвестная ошибка: {str(e)}"}), 500
     finally:
         conn.close()
 
@@ -686,21 +713,24 @@ def update_trip(trip_id):
 def delete_trip(trip_id):
     user_id = current_user.id
     conn = get_db_connection()
-    trip = conn.execute(
-        """
-        SELECT * FROM trips WHERE id = ? AND user_id = ?
-    """,
-        (trip_id, user_id),
-    ).fetchone()
-    if not trip:
+    try:
+        # Проверяем существование поездки
+        trip = conn.execute(
+            "SELECT 1 FROM trips WHERE id = ? AND user_id = ?",
+            (trip_id, user_id)
+        ).fetchone()
+        
+        if not trip:
+            return jsonify({"error": "Trip not found or access denied"}), 404
+        # Удаляем поездку 
+        conn.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
+        conn.commit()
+        return jsonify({"message": "Trip deleted successfully"}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
         conn.close()
-        return jsonify({"error": "Trip not found or access denied"}), 404
-    # удаление сначала данных, потом поездки
-    conn.execute("DELETE FROM trip_points WHERE trip_id = ?", (trip_id,))
-    conn.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"message": "Trip deleted successfully"}), 200
 
 # поиск поездки по названию и/или датам
 @app.route("/trips/search", methods=["GET"])
@@ -888,6 +918,18 @@ def is_valid_currency(currency):
         return result is not None
     finally:
         conn.close()
+
+
+@app.route("/api/airports")
+def search_airports():
+    query = request.args.get("q", "").upper()
+    conn = get_db_connection()
+    airports = conn.execute(
+        "SELECT icao, airport FROM airports WHERE icao LIKE ? OR airport LIKE ? LIMIT 10",
+        (f"%{query}%", f"%{query}%")
+    ).fetchall()
+    conn.close()
+    return jsonify([{"icao": a["icao"], "name": a["airport"]} for a in airports])
 
 # запуск приложения
 if __name__ == "__main__":
