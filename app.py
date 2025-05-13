@@ -528,54 +528,86 @@ def get_trip_details(trip_id):
             ).fetchone()
             if not trip:
                 return jsonify({"error": "Trip not found"}), 404
-            # Конвертируем все Row объекты в словари
             trip_data = {
                 "id": trip["id"],
                 "user_id": trip["user_id"],
                 "title": trip["title"],
                 "start_date": trip["start_date"],
                 "end_date": trip["end_date"],
-                "timezone": trip["timezone"] if "timezone" in trip.keys() else "UTC",
-                "base_currency": trip["base_currency"] if "base_currency" in trip.keys() else "USD"
+                "timezone": trip.get("timezone", "UTC"),
+                "base_currency": trip.get("base_currency", "USD")
             }
-            # Получаем точки маршрута
+            # Получаем точки маршрута с сортировкой по времени прибытия
             points = conn.execute(
-                "SELECT *, timezone as point_timezone FROM trip_points WHERE trip_id = ?",
+                """SELECT *, timezone as point_timezone 
+                   FROM trip_points 
+                   WHERE trip_id = ? 
+                   ORDER BY arrival_time""",
                 (trip_id,),
             ).fetchall()
             points_details = []
             total_cost = 0
-            for point in points:
-                # Конвертируем точку маршрута в словарь
+            prev_point = None  # Для хранения данных предыдущей точки
+            for idx, point in enumerate(points):
                 point_data = {
                     "id": point["id"],
                     "trip_id": point["trip_id"],
                     "location": point["location"],
                     "arrival_time": point["arrival_time"],
                     "departure_time": point["departure_time"],
-                    "flight_number": point["flight_number"] if "flight_number" in point.keys() else "",
-                    "departure_icao": point["departure_icao"] if "departure_icao" in point.keys() else "",
-                    "arrival_icao": point["arrival_icao"] if "arrival_icao" in point.keys() else "",
-                    "hotel_name": point["hotel_name"] if "hotel_name" in point.keys() else "",
-                    "timezone": point["point_timezone"] if "point_timezone" in point.keys() else trip_data["timezone"],
-                    "utc_arrival": point["utc_arrival"] if "utc_arrival" in point.keys() else None,
-                    "utc_departure": point["utc_departure"] if "utc_departure" in point.keys() else None
+                    "flight_number": point.get("flight_number", ""),
+                    "departure_icao": point.get("departure_icao", ""),
+                    "arrival_icao": point.get("arrival_icao", ""),
+                    "hotel_name": point.get("hotel_name", ""),
+                    "timezone": point.get("point_timezone", trip_data["timezone"]),
+                    "utc_arrival": point.get("utc_arrival"),
+                    "utc_departure": point.get("utc_departure"),
+                    "is_first": idx == 0,  # Первая точка маршрута
+                    "is_last": idx == len(points) - 1  # Последняя точка
                 }
-                # Обработка времени
-                display_timezone = timezone or point_data["timezone"] or trip_data["timezone"]
+                # Обработка времени для текущей точки
+                display_timezone = timezone or point_data["timezone"]
                 arrival_local = point_data["arrival_time"]
+                departure_local = point_data["departure_time"]
                 if point_data["utc_arrival"]:
                     try:
                         arrival_local = utc_to_local(point_data["utc_arrival"], display_timezone)
                     except Exception as e:
                         print(f"Error converting arrival time: {e}")
-                departure_local = point_data["departure_time"]
                 if point_data["utc_departure"]:
                     try:
                         departure_local = utc_to_local(point_data["utc_departure"], display_timezone)
                     except Exception as e:
                         print(f"Error converting departure time: {e}")
-                # Обработка расходов
+                # Добавляем информацию о времени в другом часовом поясе
+                if prev_point:
+                    # Для текущей точки (прибытие) - время вылета в нашем часовом поясе
+                    if prev_point["utc_departure"]:
+                        departure_at_current_tz = utc_to_local(
+                            prev_point["utc_departure"],
+                            point_data["timezone"]
+                        )
+                    else:
+                        departure_at_current_tz = prev_point["departure_time"]
+                    # Для предыдущей точки (отправление) - время прибытия в её часовом поясе
+                    if point_data["utc_arrival"]:
+                        arrival_at_prev_tz = utc_to_local(
+                            point_data["utc_arrival"],
+                            prev_point["timezone"]
+                        )
+                    else:
+                        arrival_at_prev_tz = point_data["arrival_time"]
+                    # Добавляем в предыдущую точку информацию о времени прибытия
+                    prev_point["arrival_info"] = {
+                        "time_at_destination": arrival_at_prev_tz,
+                        "destination_timezone": point_data["timezone"]
+                    }
+                    # Добавляем в текущую точку информацию о времени отправления
+                    point_data["departure_info"] = {
+                        "time_at_origin": departure_at_current_tz,
+                        "origin_timezone": prev_point["timezone"]
+                    }
+                # Обработка расходов (оставляем без изменений)
                 costs = conn.execute(
                     "SELECT amount, currency FROM trip_costs WHERE trip_point_id = ?",
                     (point_data["id"],),
@@ -603,15 +635,18 @@ def get_trip_details(trip_id):
                     except ValueError as e:
                         print(f"Currency conversion error: {e}")
                 total_cost += point_total
-                # Формируем данные точки
-                points_details.append({
-                    **point_data,
+                # Обновляем данные точки
+                point_data.update({
                     "arrival_time": arrival_local,
                     "departure_time": departure_local,
-                    "timezone": display_timezone,
                     "costs": point_costs,
                     "point_total": round(point_total, 2),
                 })
+                # Если это не первая точка, обновляем предыдущую
+                if prev_point:
+                    points_details[-1] = prev_point
+                points_details.append(point_data)
+                prev_point = point_data
             # Получаем список валют и временных зон
             currencies = [row["target_currency"] for row in conn.execute(
                 "SELECT DISTINCT target_currency FROM exchange_rates WHERE base_currency = 'USD'"
@@ -851,7 +886,7 @@ def local_to_utc(local_time_str, timezone_name):
         print(f'Time conversion error: {e}')
         return None
     
-# переводит время из локального часового поясав UTC
+# переводит время из локального часового пояса в UTC
 def utc_to_local(utc_time_str, timezone_name):
     try:
         if not utc_time_str or not timezone_name:
