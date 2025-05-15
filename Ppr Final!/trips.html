@@ -98,7 +98,7 @@
                 <h3 class="trip-title">{{ trip.title }}</h3>
                 <div class="trip-dates">
                     <i class="fas fa-calendar-alt"></i>
-                    {{ trip.start_date|datetimeformat }} — {{ trip.end_date|datetimeformat }}
+                    {{ trip.start_date.strftime('%d.%m.%Y') }} — {{ trip.end_date.strftime('%d.%m.%Y') }}
                 </div>
             </div>
             <div class="trip-actions">
