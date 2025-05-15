@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Мои поездки | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 3rem;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+    }
+    
+    .page-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.2rem;
+        color: var(--primary);
+    }
+    
+    .trips-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 2rem;
+    }
+    
+    .trip-card {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        transition: transform 0.3s;
+    }
+    
+    .trip-card:hover {
+        transform: translateY(-5px);
+    }
+    
+    .trip-header {
+        background: var(--primary);
+        color: white;
+        padding: 1.2rem;
+        position: relative;
+    }
+    
+    .trip-badge {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        background: var(--success);
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+    }
+    
+    .trip-title {
+        font-size: 1.2rem;
+        font-weight: 600;
+    }
+    
+    .trip-dates {
+        font-size: 0.9rem;
+        opacity: 0.9;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .trip-actions {
+        display: flex;
+        gap: 0.8rem;
+        padding: 1.5rem;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 4rem 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1 class="page-title">Мои поездки</h1>
+        <a href="{{ url_for('create_trip_route') }}" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Новая поездка
+        </a>
+    </div>
+    
+    {% if trips_list %}
+    <div class="trips-grid">
+        {% for trip in trips_list %}
+        <div class="trip-card">
+            <div class="trip-badge">{{ trip.base_currency }}</div>
+            <div class="trip-header">
+                <h3 class="trip-title">{{ trip.title }}</h3>
+                <div class="trip-dates">
+                    <i class="fas fa-calendar-alt"></i>
+                    {{ trip.start_date|datetimeformat }} — {{ trip.end_date|datetimeformat }}
+                </div>
+            </div>
+            <div class="trip-actions">
+                <a href="{{ url_for('get_trip_details', trip_id=trip.id) }}" class="btn btn-outline">
+                    <i class="fas fa-info-circle"></i> Подробнее
+                </a>
+                <form method="POST" action="{{ url_for('delete_trip', trip_id=trip.id) }}">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="fas fa-trash"></i> Удалить
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3><i class="fas fa-suitcase-rolling"></i> Пока нет поездок</h3>
+        <p>Начните планировать свое первое путешествие!</p>
+        <a href="{{ url_for('create_trip_route') }}" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Создать
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
