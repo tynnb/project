@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Мои поездки | TravelPlanner{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1 class="page-title">Мои поездки</h1>
+        <a href="{{ url_for('create_trip_route') }}" class="btn btn-primary">+ Новая поездка</a>
+    </div>
+    
+    {% if trips_list %}
+    <div class="trips-grid">
+        {% for trip in trips_list %}
+        <div class="trip-card">
+            <div class="trip-header">
+                <h3 class="trip-title">{{ trip.title }}</h3>
+                <div class="trip-dates">{{ trip.start_date }} — {{ trip.end_date }}</div>
+            </div>
+            <div class="trip-actions">
+                <a href="{{ url_for('get_trip_details', trip_id=trip.id) }}" class="btn btn-outline">Подробнее</a>
+                <form method="POST" action="{{ url_for('delete_trip', trip_id=trip.id) }}">
+                    <input type="hidden" name="_method" value="DELETE">
+                    <button type="submit" class="btn btn-danger">Удалить</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>Пока нет поездок</h3>
+        <p>Создайте свою первую поездку!</p>
+        <a href="{{ url_for('create_trip_route') }}" class="btn btn-primary">Создать</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

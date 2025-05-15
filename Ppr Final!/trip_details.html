@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}{{ trip.title }} | TravelPlanner{% endblock %}
+
+{% block content %}
+<div class="trip-hero">
+    <div class="container">
+        <h1 class="trip-title">{{ trip.title }}</h1>
+        <div class="flex gap-3">
+            <div class="badge">{{ trip.start_date }} — {{ trip.end_date }}</div>
+            <div class="badge">{{ points|length }} точек</div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="toolbar mb-4">
+        <form method="GET" class="d-flex gap-3">
+            <select name="currency" class="form-control" onchange="this.form.submit()">
+                {% for currency in available_currencies %}
+                    <option value="{{ currency }}" {% if currency == selected_currency %}selected{% endif %}>{{ currency }}</option>
+                {% endfor %}
+            </select>
+            
+            <select name="timezone" class="form-control" onchange="this.form.submit()">
+                {% for tz in available_timezones %}
+                    <option value="{{ tz }}" {% if tz == selected_timezone %}selected{% endif %}>{{ tz }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    <div class="timeline">
+        {% for point in points %}
+        <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="content">
+                <h3>{{ point.location }}</h3>
+                <p>
+                    {{ point.arrival_time }} ({{ point.timezone }}) 
+                    → {{ point.departure_time }} ({{ point.timezone }})
+                </p>
+                {% if point.flight_number %}
+                <div class="badge">
+                    ✈️ {{ point.flight_number }}
+                </div>
+                {% endif %}
+                <div class="mt-2">
+                    <strong>Расходы:</strong> {{ point.point_total|round(2) }} {{ selected_currency }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="total-cost mt-4">
+        <h4>Общая стоимость: {{ total_cost|round(2) }} {{ selected_currency }}</h4>
+    </div>
+</div>
+{% endblock %}

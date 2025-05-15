@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Вход | TravelPlanner{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h1 class="auth-title">Вход в аккаунт</h1>
+        <p class="auth-description">Войдите, чтобы продолжить планирование</p>
+        
+        {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+        
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" class="form-control" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Пароль</label>
+                <input type="password" id="password" name="password" class="form-control" required>
+            </div>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%; padding: 1rem;">Войти</button>
+            
+            <div class="auth-footer">
+                Нет аккаунта? <a href="{{ url_for('register') }}">Зарегистрируйтесь</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

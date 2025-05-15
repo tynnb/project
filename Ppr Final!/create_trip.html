@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Новая поездка | TravelPlanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    
+    .point-form {
+        background: #f8f9fa;
+        border-left: 4px solid var(--primary);
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    .airport-hint {
+        font-size: 0.8rem;
+        color: var(--gray);
+        margin-top: 0.3rem;
+    }
+    
+    .cost-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="form-container">
+        <h1 class="mb-4">Новая поездка</h1>
+        
+        <form method="POST" action="{{ url_for('create_trip_route') }}">
+            <div class="mb-4">
+                <label class="form-label">Название поездки</label>
+                <input type="text" name="title" class="form-control" required>
+            </div>
+            
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <label class="form-label">Дата начала</label>
+                    <input type="date" name="start_date" class="form-control" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Дата окончания</label>
+                    <input type="date" name="end_date" class="form-control" required>
+                </div>
+            </div>
+            
+            <div class="mb-4">
+                <label class="form-label">Базовая валюта</label>
+                <select name="base_currency" class="form-control" required>
+                    {% for currency in available_currencies %}
+                        <option value="{{ currency }}">{{ currency }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div id="points-container">
+                <div class="point-form">
+                    <div class="d-flex justify-content-between mb-3">
+                        <h5>Точка маршрута #1</h5>
+                        <button type="button" class="btn btn-danger btn-sm remove-point">×</button>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Местоположение</label>
+                        <input type="text" name="locations[]" class="form-control" required>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Дата и время прибытия</label>
+                            <input type="datetime-local" name="arrival_time[]" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Дата и время отъезда</label>
+                            <input type="datetime-local" name="departure_time[]" class="form-control" required>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Код аэропорта вылета (ICAO)</label>
+                            <input type="text" name="departure_icao[]" class="form-control" 
+                                   pattern="[A-Za-z]{4}" 
+                                   title="4-буквенный код ICAO">
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label class="form-label">Код аэропорта прилета (ICAO)</label>
+                            <input type="text" name="arrival_icao[]" class="form-control"
+                                   pattern="[A-Za-z]{4}"
+                                   title="4-буквенный код ICAO">
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Номер рейса</label>
+                        <input type="text" name="flight_number[]" class="form-control">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Название отеля</label>
+                        <input type="text" name="hotel_name[]" class="form-control">
+                    </div>
+                    
+                    <div class="cost-fields">
+                        <div class="mb-3">
+                            <label class="form-label">Стоимость</label>
+                            <input type="number" name="cost_amount[]" class="form-control" step="0.01">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Валюта</label>
+                            <select name="cost_currency[]" class="form-control">
+                                {% for currency in available_currencies %}
+                                    <option value="{{ currency }}">{{ currency }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-4">
+                <button type="button" id="add-point" class="btn btn-outline">
+                    + Добавить точку маршрута
+                </button>
+            </div>
+            
+            <div class="d-flex justify-content-between">
+                <a href="{{ url_for('get_trips') }}" class="btn btn-secondary">Отмена</a>
+                <button type="submit" class="btn btn-primary">Сохранить поездку</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.getElementById('add-point').addEventListener('click', function() {
+    const newPoint = document.querySelector('.point-form').cloneNode(true);
+    const pointsCount = document.querySelectorAll('.point-form').length + 1;
+    newPoint.querySelector('h5').textContent = `Точка маршрута #${pointsCount}`;
+    newPoint.querySelectorAll('input').forEach(input => {
+        if(input.type !== 'button') input.value = '';
+    });
+    newPoint.querySelector('select').selectedIndex = 0;
+    document.getElementById('points-container').appendChild(newPoint);
+});
+
+document.addEventListener('click', function(e) {
+    if(e.target.classList.contains('remove-point')) {
+        e.target.closest('.point-form').remove();
+    }
+});
+</script>
+{% endblock %}
