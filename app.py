@@ -920,6 +920,12 @@ def search_airports():
         ).fetchall()
     return jsonify([{"icao": a["icao"], "name": a["airport"]} for a in airports])
 
+@app.template_filter('datetimeformat')
+def datetimeformat_filter(value, format='%Y-%m-%d %H:%M'):
+    if value is None:
+        return ""
+    return value.strftime(format)
+
 # запуск приложения
 if __name__ == "__main__":
     init_db()
