@@ -143,6 +143,14 @@ def init_db():
             )
         """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS city_timezones (
+                city TEXT PRIMARY KEY,
+                timezone TEXT NOT NULL
+            )
+        """
+        )
     try:
         conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
     except sqlite3.OperationalError:
@@ -196,7 +204,7 @@ def register_user(username, email, password):
 def authenticate_user(email, password):
     with get_db_connection() as conn:
         user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if user and check_data(password, user["password_hash"]):
+    if user and bcrypt.checkpw(password.encode('utf-8'), user["password_hash"].encode('utf-8')):
         return user
     return None
 
@@ -422,13 +430,12 @@ def create_trip(title, start_date, end_date, points, base_currency="USD"):
 
 
 @app.route("/create_trip", methods=["GET", "POST"])
-@login_required # нужна аутентификация
+@login_required
 def create_trip_route():
     user_id = current_user.id
     try:
         with get_db_connection() as conn:
-            icao_list = conn.execute("SELECT icao, airport FROM airports LIMIT 100").fetchall() # получение списка аэропортов
-            # список доступных валют
+            icao_list = conn.execute("SELECT icao, airport FROM airports LIMIT 100").fetchall()
             currencies = conn.execute(
                 "SELECT DISTINCT target_currency FROM exchange_rates"
             ).fetchall()
@@ -437,55 +444,89 @@ def create_trip_route():
             with get_db_connection() as conn:
                 currencies = conn.execute("SELECT DISTINCT target_currency FROM exchange_rates").fetchall()
         if request.method == "GET":
-            return render_template("create_trip.html", icao_list=icao_list, available_currencies=[c['target_currency'] for c in currencies])
-        # создание поездки
-        if request.method == "POST":
-            data = request.form
-            title = data.get("title")
-            start_date = data.get("start_date")
-            end_date = data.get("end_date")
-            base_currency = data.get("base_currency", "USD")
-            departure_icao = data.get("departure_icao")
-            arrival_icao = data.get("arrival_icao")
-            locations = data.getlist("locations[]")
-            arrival_times = data.getlist("arrival_time[]")
-            departure_times = data.getlist("departure_time[]")
-            flight_numbers = data.getlist("flight_number[]")
-            hotel_names = data.getlist("hotel_name[]")
-            departure_icao = data.getlist("departure_icao[]")
-            arrival_icao = data.getlist("arrival_icao[]")     
-            cost_amounts = data.getlist("cost_amount[]")      
-            cost_currencies = data.getlist("cost_currency[]")
-            if not all([title, start_date, end_date]):
-                return jsonify({"error": "Missing required trip data"}), 400
-            if not locations:
-                return jsonify({"error": "At least one location is required"}), 400
+            return render_template("create_trip.html", 
+                                icao_list=icao_list, 
+                                available_currencies=[c['target_currency'] for c in currencies])
+        # Обработка POST запроса
+        data = request.form
+        # Получаем основные данные поездки
+        title = data.get("title")
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+        base_currency = data.get("base_currency", "USD")
+        # Получаем данные точек маршрута
+        locations = data.getlist("locations[]")
+        arrival_times = data.getlist("arrival_time[]")
+        departure_times = data.getlist("departure_time[]")
+        flight_numbers = data.getlist("flight_number[]")
+        hotel_names = data.getlist("hotel_name[]")
+        departure_icaos = data.getlist("departure_icao[]")
+        arrival_icaos = data.getlist("arrival_icao[]")
+        cost_amounts = data.getlist("cost_amount[]")
+        cost_currencies = data.getlist("cost_currency[]")
+        # Валидация обязательных полей
+        if not title or not start_date or not end_date:
+            return render_template("create_trip.html",
+                                 error="Заполните все обязательные поля поездки",
+                                 icao_list=icao_list,
+                                 available_currencies=[c['target_currency'] for c in currencies],
+                                 form_data=request.form)
+        if not locations:
+            return render_template("create_trip.html",
+                                error="Добавьте хотя бы одну точку маршрута",
+                                icao_list=icao_list,
+                                available_currencies=[c['target_currency'] for c in currencies],
+                                form_data=request.form)
+        # Формируем список точек маршрута
+        points = []
+        for i in range(len(locations)):
+            # Проверяем обязательные поля для каждой точки
+            if not locations[i] or not arrival_times[i] or not departure_times[i]:
+                continue
             try:
-                create_trip(
-                    title,
-                    start_date,
-                    end_date,
-                    [
-                        {
-                            "location": locations[i],
-                            "arrival_time": arrival_times[i],
-                            "departure_time": departure_times[i],
-                            "flight_number": flight_numbers[i],
-                            "hotel_name": hotel_names[i],
-                            "departure_icao": departure_icao[i] if i < len(departure_icao) else "",
-                            "arrival_icao": arrival_icao[i] if i < len(arrival_icao) else "",
-                            "cost_amount": float(cost_amounts[i]) if cost_amounts[i] and cost_amounts[i] else 0,
-                            "cost_currency": cost_currencies[i] if i <  len(cost_currencies) and cost_currencies[i] else "USD",
-                        }
-                        for i in range(len(locations))
-                    ],
-                    base_currency,
-                )
-                return redirect(url_for("index"))
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+                point = {
+                    "location": locations[i],
+                    "arrival_time": f"{arrival_times[i]}:00" if ':' not in arrival_times[i] else arrival_times[i],
+                    "departure_time": f"{departure_times[i]}:00" if ':' not in departure_times[i] else departure_times[i],
+                    "flight_number": flight_numbers[i] if i < len(flight_numbers) else "",
+                    "hotel_name": hotel_names[i] if i < len(hotel_names) else "",
+                    "departure_icao": departure_icaos[i] if i < len(departure_icaos) else "",
+                    "arrival_icao": arrival_icaos[i] if i < len(arrival_icaos) else "",
+                    "cost_amount": float(cost_amounts[i]) if i < len(cost_amounts) and cost_amounts[i] else 0,
+                    "cost_currency": cost_currencies[i] if i < len(cost_currencies) and cost_currencies[i] else "USD"
+                }
+                points.append(point)
+            except ValueError as e:
+                return render_template("create_trip.html",
+                                     error=f"Ошибка в данных точки маршрута: {str(e)}",
+                                     icao_list=icao_list,
+                                     available_currencies=[c['target_currency'] for c in currencies],
+                                     form_data=request.form)
+        # Создаем поездку
+        try:
+            trip_id = create_trip(title, start_date, end_date, points, base_currency)
+            # Если create_trip возвращает Response (в случае ошибки)
+            if hasattr(trip_id, 'status_code'):
+                error_data = trip_id.get_json()
+                return render_template("create_trip.html",
+                                    error=error_data.get('error', 'Неизвестная ошибка'),
+                                    icao_list=icao_list,
+                                    available_currencies=[c['target_currency'] for c in currencies],
+                                    form_data=request.form)
+            
+            return redirect(url_for("get_trip_details", trip_id=trip_id))
+        except Exception as e:
+            return render_template("create_trip.html",
+                                error=f"Ошибка при создании поездки: {str(e)}",
+                                icao_list=icao_list,
+                                available_currencies=[c['target_currency'] for c in currencies],
+                                form_data=request.form)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Ошибка в create_trip_route: {str(e)}")
+        return render_template("create_trip.html",
+                             error="Внутренняя ошибка сервера",
+                             icao_list=icao_list,
+                             available_currencies=[c['target_currency'] for c in currencies])
 
 
 # отображает список поездок текущего пользователя
@@ -495,21 +536,24 @@ def get_trips():
     user_id = current_user.id
     with get_db_connection() as conn:
         trips = conn.execute(
-            """
-            SELECT * FROM trips WHERE user_id = ?
-        """,
+            "SELECT * FROM trips WHERE user_id = ?",
             (user_id,),
         ).fetchall()
     trips_list = []
     for trip in trips:
-        trips_list.append(
-            {
-                "id": trip["id"],
-                "title": trip["title"],
-                "start_date": trip["start_date"],
-                "end_date": trip["end_date"],
-            }
-        )
+        # Преобразуем строковые даты в объекты datetime
+        try:
+            start_date = datetime.strptime(trip["start_date"], '%Y-%m-%d') if isinstance(trip["start_date"], str) else trip["start_date"]
+            end_date = datetime.strptime(trip["end_date"], '%Y-%m-%d') if isinstance(trip["end_date"], str) else trip["end_date"]
+        except (ValueError, TypeError):
+            start_date = trip["start_date"]
+            end_date = trip["end_date"]
+        trips_list.append({
+            "id": trip["id"],
+            "title": trip["title"],
+            "start_date": start_date,
+            "end_date": end_date,
+        })
     return render_template("trips.html", trips_list=trips_list)
 
 # просмотр информации о поездке
@@ -527,17 +571,18 @@ def get_trip_details(trip_id):
                 (trip_id, user_id),
             ).fetchone()
             if not trip:
-                return jsonify({"error": "Trip not found"}), 404
+                return jsonify({"error": "Trip not found"}), 404 
+            # Создаем словарь с данными поездки (используем .get() с проверкой наличия ключа)
             trip_data = {
                 "id": trip["id"],
                 "user_id": trip["user_id"],
                 "title": trip["title"],
                 "start_date": trip["start_date"],
                 "end_date": trip["end_date"],
-                "timezone": trip.get("timezone", "UTC"),
-                "base_currency": trip.get("base_currency", "USD")
+                "timezone": trip["timezone"] if "timezone" in trip.keys() else "UTC",
+                "base_currency": trip["base_currency"] if "base_currency" in trip.keys() else "USD"
             }
-            # Получаем точки маршрута с сортировкой по времени прибытия
+            # Получаем точки маршрута
             points = conn.execute(
                 """SELECT *, timezone as point_timezone 
                    FROM trip_points 
@@ -547,25 +592,26 @@ def get_trip_details(trip_id):
             ).fetchall()
             points_details = []
             total_cost = 0
-            prev_point = None  # Для хранения данных предыдущей точки
+            prev_point = None
             for idx, point in enumerate(points):
+                # Создаем словарь для точки маршрута с проверкой наличия ключей
                 point_data = {
                     "id": point["id"],
                     "trip_id": point["trip_id"],
                     "location": point["location"],
                     "arrival_time": point["arrival_time"],
                     "departure_time": point["departure_time"],
-                    "flight_number": point.get("flight_number", ""),
-                    "departure_icao": point.get("departure_icao", ""),
-                    "arrival_icao": point.get("arrival_icao", ""),
-                    "hotel_name": point.get("hotel_name", ""),
-                    "timezone": point.get("point_timezone", trip_data["timezone"]),
-                    "utc_arrival": point.get("utc_arrival"),
-                    "utc_departure": point.get("utc_departure"),
-                    "is_first": idx == 0,  # Первая точка маршрута
-                    "is_last": idx == len(points) - 1  # Последняя точка
+                    "flight_number": point["flight_number"] if "flight_number" in point.keys() else "",
+                    "departure_icao": point["departure_icao"] if "departure_icao" in point.keys() else "",
+                    "arrival_icao": point["arrival_icao"] if "arrival_icao" in point.keys() else "",
+                    "hotel_name": point["hotel_name"] if "hotel_name" in point.keys() else "",
+                    "timezone": point["point_timezone"] if "point_timezone" in point.keys() else trip_data["timezone"],
+                    "utc_arrival": point["utc_arrival"] if "utc_arrival" in point.keys() else None,
+                    "utc_departure": point["utc_departure"] if "utc_departure" in point.keys() else None,
+                    "is_first": idx == 0,
+                    "is_last": idx == len(points) - 1
                 }
-                # Обработка времени для текущей точки
+                # Обработка времени
                 display_timezone = timezone or point_data["timezone"]
                 arrival_local = point_data["arrival_time"]
                 departure_local = point_data["departure_time"]
@@ -579,35 +625,39 @@ def get_trip_details(trip_id):
                         departure_local = utc_to_local(point_data["utc_departure"], display_timezone)
                     except Exception as e:
                         print(f"Error converting departure time: {e}")
-                # Добавляем информацию о времени в другом часовом поясе
+                # Обработка информации о предыдущей точке
                 if prev_point:
-                    # Для текущей точки (прибытие) - время вылета в нашем часовом поясе
-                    if prev_point["utc_departure"]:
-                        departure_at_current_tz = utc_to_local(
-                            prev_point["utc_departure"],
-                            point_data["timezone"]
-                        )
-                    else:
-                        departure_at_current_tz = prev_point["departure_time"]
-                    # Для предыдущей точки (отправление) - время прибытия в её часовом поясе
+                    departure_at_current_tz = prev_point["departure_time"]
+                    if "utc_departure" in prev_point and prev_point["utc_departure"]:
+                        try:
+                            departure_at_current_tz = utc_to_local(
+                                prev_point["utc_departure"],
+                                point_data["timezone"]
+                            )
+                        except Exception as e:
+                            print(f"Error converting departure time for previous point: {e}")
+                    arrival_at_prev_tz = point_data["arrival_time"]
                     if point_data["utc_arrival"]:
-                        arrival_at_prev_tz = utc_to_local(
-                            point_data["utc_arrival"],
-                            prev_point["timezone"]
-                        )
-                    else:
-                        arrival_at_prev_tz = point_data["arrival_time"]
-                    # Добавляем в предыдущую точку информацию о времени прибытия
-                    prev_point["arrival_info"] = {
-                        "time_at_destination": arrival_at_prev_tz,
-                        "destination_timezone": point_data["timezone"]
-                    }
-                    # Добавляем в текущую точку информацию о времени отправления
+                        try:
+                            arrival_at_prev_tz = utc_to_local(
+                                point_data["utc_arrival"],
+                                prev_point["timezone"]
+                            )
+                        except Exception as e:
+                            print(f"Error converting arrival time for previous point: {e}")
+                    # Обновляем предыдущую точку
+                    if prev_point in points_details:
+                        prev_point_idx = points_details.index(prev_point)
+                        points_details[prev_point_idx]["arrival_info"] = {
+                            "time_at_destination": arrival_at_prev_tz,
+                            "destination_timezone": point_data["timezone"]
+                        }
+                    # Добавляем информацию о времени отправления
                     point_data["departure_info"] = {
                         "time_at_origin": departure_at_current_tz,
                         "origin_timezone": prev_point["timezone"]
                     }
-                # Обработка расходов (оставляем без изменений)
+                # Обработка расходов
                 costs = conn.execute(
                     "SELECT amount, currency FROM trip_costs WHERE trip_point_id = ?",
                     (point_data["id"],),
@@ -615,24 +665,22 @@ def get_trip_details(trip_id):
                 point_costs = []
                 point_total = 0
                 for cost in costs:
-                    cost_data = {
-                        "amount": cost["amount"],
-                        "currency": cost["currency"]
-                    }
                     try:
+                        cost_amount = cost["amount"]
+                        cost_currency = cost["currency"]
                         converted = convert_currency(
-                            cost_data["amount"],
-                            cost_data["currency"],
+                            cost_amount,
+                            cost_currency,
                             selected_currency
                         )
                         point_total += converted
                         point_costs.append({
-                            "original_amount": cost_data["amount"],
-                            "original_currency": cost_data["currency"],
+                            "original_amount": cost_amount,
+                            "original_currency": cost_currency,
                             "converted_amount": round(converted, 2),
                             "converted_currency": selected_currency,
                         })
-                    except ValueError as e:
+                    except Exception as e:
                         print(f"Currency conversion error: {e}")
                 total_cost += point_total
                 # Обновляем данные точки
@@ -642,18 +690,19 @@ def get_trip_details(trip_id):
                     "costs": point_costs,
                     "point_total": round(point_total, 2),
                 })
-                # Если это не первая точка, обновляем предыдущую
-                if prev_point:
-                    points_details[-1] = prev_point
                 points_details.append(point_data)
                 prev_point = point_data
             # Получаем список валют и временных зон
-            currencies = [row["target_currency"] for row in conn.execute(
-                "SELECT DISTINCT target_currency FROM exchange_rates WHERE base_currency = 'USD'"
-            ).fetchall()]
+            currencies = []
+            try:
+                currencies = [row["target_currency"] for row in conn.execute(
+                    "SELECT DISTINCT target_currency FROM exchange_rates WHERE base_currency = 'USD'"
+                ).fetchall()]
+            except Exception as e:
+                print(f"Error fetching currencies: {e}")
             available_timezones = list(set(
                 p["timezone"] for p in points_details
-                if p["timezone"]
+                if p.get("timezone")
             ))
             return render_template(
                 "trip_details.html",
@@ -793,85 +842,102 @@ def import_airports_from_csv(csv_file_path):
 # возвращает название временной зоны
 def get_timezone_by_city(city_name):
     if not city_name:
-        return None
-    # Настройки запросов
+        return "UTC"  # Возвращаем UTC по умолчанию вместо None
     headers = {
-        'User-Agent': 'YourTravelApp/1.0 (tynbb084@gmail.com)'  # Обязательно для Nominatim
+        'User-Agent': 'YourTravelApp/1.0 (tynbb084@gmail.com)'
     }
-    timeout = 5  # Таймаут для всех запросов
+    timeout = 5
     try:
-        # Проверка кэша (если у вас есть таблица city_timezones)
+        # Проверяем существование таблицы city_timezones
         with get_db_connection() as conn:
-            cached = conn.execute(
-                "SELECT timezone FROM city_timezones WHERE city = ?",
-                (city_name,)
-            ).fetchone()
-            if cached:
-                return cached["timezone"]
-        # Запрос к Nominatim (с задержкой для соблюдения лимитов)
-        time.sleep(1)  # Ожидание 1 сек между запросами (лимит Nominatim)
-        geo_response = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": city_name,
-                "format": "json",
-                "limit": 1,
-                "accept-language": "en"  # Для англоязычных названий
-            },
-            headers=headers,
-            timeout=timeout
-        )
-        # Проверка статуса и данных
-        if geo_response.status_code == 429:
-            print("Превышен лимит запросов к Nominatim")
-            return None
-        geo_response.raise_for_status()
-        geo_data = geo_response.json()
-        if not geo_data:
-            print(f"Город не найден: {city_name}")
-            return None
-        # Получение координат
-        lat = geo_data[0].get("lat")
-        lon = geo_data[0].get("lon")
-        if not lat or not lon:
-            print(f"Не удалось получить координаты для {city_name}")
-            return None
-        # Запрос к TimeZoneDB
-        tz_response = requests.get(
-            "http://api.timezonedb.com/v2.1/get-time-zone",
-            params={
-                "key": TIMEZONEDB_API_KEY,
-                "format": "json",
-                "by": "position",
-                "lat": lat,
-                "lng": lon,
-                "fields": "zoneName"
-            },
-            timeout=timeout
-        )
-        tz_data = tz_response.json()
-        if tz_data.get("status") != "OK":
-            print(f"Ошибка TimeZoneDB: {tz_data.get('message')}")
-            return None
-        timezone = tz_data["zoneName"]
-        # Кэширование результата
-        with get_db_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO city_timezones (city, timezone) VALUES (?, ?)",
-                (city_name, timezone)
+            try:
+                # Проверяем существование таблицы
+                conn.execute("SELECT 1 FROM city_timezones LIMIT 1")
+                # Если таблица существует, проверяем кэш
+                cached = conn.execute(
+                    "SELECT timezone FROM city_timezones WHERE city = ?",
+                    (city_name,)
+                ).fetchone()
+                if cached:
+                    return cached["timezone"]
+            except sqlite3.OperationalError:
+                # Если таблицы нет, создаем ее
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS city_timezones (
+                        city TEXT PRIMARY KEY,
+                        timezone TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.commit()
+                print("Создана таблица city_timezones")
+        # Запрос к Nominatim
+        time.sleep(1)  # Соблюдаем лимиты API
+        try:
+            geo_response = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": city_name,
+                    "format": "json",
+                    "limit": 1,
+                    "accept-language": "en"
+                },
+                headers=headers,
+                timeout=timeout
             )
-            conn.commit()
+            if geo_response.status_code == 429:
+                print("Превышен лимит запросов к Nominatim")
+                return "UTC"
+            geo_response.raise_for_status()
+            geo_data = geo_response.json()
+            if not geo_data:
+                print(f"Город не найден: {city_name}")
+                return "UTC"
+            lat = geo_data[0].get("lat")
+            lon = geo_data[0].get("lon")
+            if not lat or not lon:
+                print(f"Не удалось получить координаты для {city_name}")
+                return "UTC"
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка запроса к Nominatim: {str(e)}")
+            return "UTC"
+        # Запрос к TimeZoneDB
+        try:
+            tz_response = requests.get(
+                "http://api.timezonedb.com/v2.1/get-time-zone",
+                params={
+                    "key": TIMEZONEDB_API_KEY,
+                    "format": "json",
+                    "by": "position",
+                    "lat": lat,
+                    "lng": lon,
+                    "fields": "zoneName"
+                },
+                timeout=timeout
+            )
+            tz_data = tz_response.json()
+            if tz_data.get("status") != "OK":
+                print(f"Ошибка TimeZoneDB: {tz_data.get('message', 'Unknown error')}")
+                return "UTC"
+            timezone = tz_data["zoneName"]
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка запроса к TimeZoneDB: {str(e)}")
+            return "UTC"
+        # Кэширование результата
+        try:
+            with get_db_connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO city_timezones (city, timezone) VALUES (?, ?)",
+                    (city_name, timezone)
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            print(f"Ошибка при сохранении в кэш: {str(e)}")
         return timezone
-    except requests.exceptions.RequestException as e:
-        print(f"Ошибка сети: {str(e)}")
-    except json.JSONDecodeError as e:
-        print(f"Ошибка разбора JSON: {str(e)}")
-    except sqlite3.Error as e:
-        print(f"Ошибка базы данных: {str(e)}")
     except Exception as e:
-        print(f"Неожиданная ошибка: {str(e)}")
+        print(f"Неожиданная ошибка в get_timezone_by_city: {str(e)}")
         return "UTC"
-    return None
 
 # перевод из локального часового пояса в UTC    
 def local_to_utc(local_time_str, timezone_name):
