@@ -98,7 +98,11 @@
                 <h3 class="trip-title">{{ trip.title }}</h3>
                 <div class="trip-dates">
                     <i class="fas fa-calendar-alt"></i>
-                    {{ trip.start_date.strftime('%d.%m.%Y') }} — {{ trip.end_date.strftime('%d.%m.%Y') }}
+                    {% if trip.start_date and trip.end_date %}
+                        {{ trip.start_date.strftime('%d.%m.%Y') }} — {{ trip.end_date.strftime('%d.%m.%Y') }}
+                    {% else %}
+                        Даты не указаны
+                    {% endif %}
                 </div>
             </div>
             <div class="trip-actions">
