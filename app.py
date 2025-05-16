@@ -441,8 +441,8 @@ def create_trip_route():
         arrival_icao = data.get("arrival_icao")
         locations = data.getlist("locations[]")
         # In your create_trip_route function, before calling create_trip:
-        arrival_times = data.getlist("arrival_time[]", [])
-        departure_times = data.getlist("departure_time[]", [])
+        arrival_times = data.getlist("arrival_time[]")
+        departure_times = data.getlist("departure_time[]")
         flight_numbers = data.getlist("flight_number[]")
         hotel_names = data.getlist("hotel_name[]")
         cost_amounts = data.getlist("cost_amount[]")
@@ -520,7 +520,7 @@ def get_trips():
 def get_trip_details(trip_id):
     user_id = current_user.id
     selected_currency = request.args.get("currency", "USD")
-    timezone = request.args.get("timezone")
+    #timezone = request.args.get("timezone", trip["timezone"] if "timezone" in trip else "UTC")
     try:
         with get_db_connection() as conn:
             # Получаем данные о поездке
@@ -530,6 +530,9 @@ def get_trip_details(trip_id):
             ).fetchone()
             if not trip:
                 return jsonify({"error": "Trip not found"}), 404 
+            trip_timezone = trip["timezone"] if "timezone" in trip.keys() else "UTC"
+            selected_currency = request.args.get("currency", "USD")
+            timezone = request.args.get("timezone", trip_timezone)
             # Создаем словарь с данными поездки (используем .get() с проверкой наличия ключа)
             trip_data = {
                 "id": trip["id"],
@@ -537,7 +540,7 @@ def get_trip_details(trip_id):
                 "title": trip["title"],
                 "start_date": trip["start_date"],
                 "end_date": trip["end_date"],
-                "timezone": trip["timezone"] if "timezone" in trip.keys() else "UTC",
+                "timezone": trip_timezone,
                 "base_currency": trip["base_currency"] if "base_currency" in trip.keys() else "USD"
             }
             # Получаем точки маршрута
