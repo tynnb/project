@@ -441,12 +441,14 @@ def create_trip_route():
         arrival_icao = data.get("arrival_icao")
         locations = data.getlist("locations[]")
         # In your create_trip_route function, before calling create_trip:
-        arrival_times = [t.replace('T', ' ') if 'T' in t else t for t in arrival_times]
-        departure_times = [t.replace('T', ' ') if 'T' in t else t for t in departure_times]
+        arrival_times = data.getlist("arrival_time[]", [])
+        departure_times = data.getlist("departure_time[]", [])
         flight_numbers = data.getlist("flight_number[]")
         hotel_names = data.getlist("hotel_name[]")
         cost_amounts = data.getlist("cost_amount[]")
         cost_currencies = data.getlist("cost_currency[]")
+        arrival_times = [t.replace('T', ' ') if 'T' in t else t for t in arrival_times]
+        departure_times = [t.replace('T', ' ') if 'T' in t else t for t in departure_times]
         #if not all([title, start_date, end_date, departure_icao, arrival_icao]):
         if not all([title, start_date, end_date]):
             return jsonify({"error": "Missing required trip data"}), 400
