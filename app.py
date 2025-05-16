@@ -18,7 +18,7 @@ import time
 import json
 
 SECRET_KEY = "21831912"
-TIMEZONEDB_API_KEY = "51430042"
+TIMEZONEDB_API_KEY = "ES8DBCKKI0I8"
 
 # создание экземпляра приложения
 app = Flask(__name__, template_folder="Ppr Final!")
@@ -49,10 +49,6 @@ def get_db_connection():
     conn = sqlite3.connect("database.db") # создание соединения
     conn.row_factory = sqlite3.Row # возвращает строки
     return conn
-
-# закрывает соединение с бд
-def close_db_connection(conn):
-    conn.close()
 
 # инициализация бд, создание таблиц, если они не существуют
 def init_db():
@@ -259,21 +255,22 @@ def logout():
 # полуяение текущих курсов валют и сохранение их в бд (обновление раз в день)
 def fetch_and_store_exchange_rates(base_currency="USD"):
     try:
+        # Сначала проверяем/создаем таблицу
         with get_db_connection() as conn:
-            # Проверяем и добавляем колонку fetched_at если её нет
-            try:
-                conn.execute("SELECT fetched_at FROM exchange_rates LIMIT 1")
-            except sqlite3.OperationalError:
-                conn.execute("ALTER TABLE exchange_rates ADD COLUMN fetched_at DATE")
-                conn.commit()
-            today = date.today().isoformat()
-            # Добавляем базовую валюту
-            conn.execute(
-                "INSERT OR IGNORE INTO exchange_rates (base_currency, target_currency, rate, fetched_at) "
-                "VALUES (?, ?, ?, ?)",
-                (base_currency, base_currency, 1.0, today)
-            )
-            # Проверяем, обновлялись ли курсы сегодня
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS exchange_rates (
+                    base_currency TEXT,
+                    target_currency TEXT,
+                    rate REAL,
+                    date TEXT,
+                    fetched_at DATE,
+                    UNIQUE(base_currency, target_currency)
+                )
+            """)
+            conn.commit()
+        today = date.today().isoformat()
+        # Проверяем, обновлялись ли курсы сегодня
+        with get_db_connection() as conn:
             existing = conn.execute(
                 "SELECT 1 FROM exchange_rates WHERE base_currency = ? AND fetched_at = ? LIMIT 1",
                 (base_currency, today)
@@ -281,44 +278,45 @@ def fetch_and_store_exchange_rates(base_currency="USD"):
             if existing:
                 print("Rates already updated today")
                 return True
-            # Получаем данные от API
-            try:
-                url = f"https://open.er-api.com/v6/latest/{base_currency}"
-                print(f"Fetching rates from: {url}")
-                response = requests.get(url, timeout=15)
-                if response.status_code != 200:
-                    print(f"API request failed with status {response.status_code}")
-                    return False
-                response.raise_for_status()
-                data = response.json()
-                if data.get("result") != "success":
-                    error_msg = data.get('error-type', 'unknown error')
-                    print(f"API returned error: {error_msg}")
-                    return False
-                rates = data.get("rates", {})
-                if not rates:
-                    print("No rates received from API")
-                    return False
-                # Начинаем транзакцию
+        # Получаем данные от API
+        try:
+            url = f"https://open.er-api.com/v6/latest/{base_currency}"
+            print(f"Fetching rates from: {url}")
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("result") != "success":
+                print(f"API error: {data.get('error-type', 'unknown error')}")
+                return False
+            rates = data.get("rates", {})
+            if not rates:
+                print("No rates received from API")
+                return False
+            # Вставляем данные одной транзакцией
+            with get_db_connection() as conn:
                 conn.execute("BEGIN TRANSACTION")
                 try:
+                    # Добавляем базовую валюту
+                    conn.execute(
+                        "INSERT OR REPLACE INTO exchange_rates VALUES (?, ?, ?, ?, ?)",
+                        (base_currency, base_currency, 1.0, today, today)
+                    )
+                    # Вставляем все курсы
                     for target_currency, rate in rates.items():
                         conn.execute(
-                            "INSERT OR REPLACE INTO exchange_rates "
-                            "(base_currency, target_currency, rate, fetched_at) "
-                            "VALUES (?, ?, ?, ?)",
-                            (base_currency, target_currency, rate, today)
+                            "INSERT OR REPLACE INTO exchange_rates VALUES (?, ?, ?, ?, ?)",
+                            (base_currency, target_currency, rate, today, today)
                         )
                     conn.commit()
                     print(f"Successfully updated {len(rates)} rates")
                     return True
                 except sqlite3.Error as e:
                     conn.rollback()
-                    print(f"Database error during update: {e}")
+                    print(f"Database error: {e}")
                     return False
-            except requests.exceptions.RequestException as e:
-                print(f"Request to API failed: {e}")
-                return False
+        except requests.exceptions.RequestException as e:
+            print(f"API request failed: {e}")
+            return False
     except Exception as e:
         print(f"Unexpected error: {e}")
         return False
@@ -349,184 +347,141 @@ def convert_currency(amount, from_currency, to_currency):
 # создание новой поездки
 def create_trip(title, start_date, end_date, points, base_currency="USD"):
     user_id = current_user.id
+    conn = get_db_connection()
     try:
         if not points:
             raise ValueError("Не указаны точки маршрута")
-        # Определение временной зоны поездки
-        trip_timezone = get_timezone_by_city(points[0]["location"]) if points else "UTC"
-        with get_db_connection() as conn:
-            # Создание поездки
-            cursor = conn.execute(
+        trip_timezone = get_timezone_by_city(points[0]["location"]) if points else "UTC" # определение временной зоны
+        cursor = conn.execute(
+            """
+            INSERT INTO trips (user_id, title, start_date, end_date, timezone, base_currency)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (user_id, title, start_date, end_date, trip_timezone, base_currency),
+        )
+        trip_id = cursor.lastrowid # получение id созданной поездки
+        fetch_and_store_exchange_rates()
+        # обработка точек маршрута
+        for point in points:
+            if not all(
+                key in point for key in ["location", "arrival_time", "departure_time"]
+            ):
+                raise ValueError("Missing required point data")
+            point_timezone = get_timezone_by_city(point["location"]) or trip_timezone # определение временной зоны
+            # конвертация времени в UTC
+            utc_arrival = local_to_utc(point["arrival_time"], point_timezone)
+            utc_departure = local_to_utc(point["departure_time"], point_timezone)
+            # создание точки
+            point_cursor = conn.execute(
                 """
-                INSERT INTO trips (user_id, title, start_date, end_date, timezone, base_currency)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (user_id, title, start_date, end_date, trip_timezone, base_currency),
+                INSERT INTO trip_points (trip_id, location, arrival_time, departure_time,
+                timezone, utc_arrival, utc_departure, flight_number, departure_icao, arrival_icao, hotel_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    trip_id,
+                    point["location"],
+                    point["arrival_time"],
+                    point["departure_time"],
+                    point_timezone,
+                    utc_arrival,
+                    utc_departure,
+                    point["flight_number"],
+                    point["departure_icao"],
+                    point["arrival_icao"],
+                    point["hotel_name"],
+                ),
             )
-            trip_id = cursor.lastrowid
-            # Обработка точек маршрута
-            for point in points:
-                # Валидация обязательных полей
-                if not all(key in point for key in ["location", "arrival_time", "departure_time"]):
-                    raise ValueError("Отсутствуют обязательные данные точки")
-                # Валидация ICAO-кодов
-                for icao_type in ["departure_icao", "arrival_icao"]:
-                    if point.get(icao_type):
-                        if not conn.execute("SELECT 1 FROM airports WHERE icao = ?", (point[icao_type],)).fetchone():
-                            raise ValueError(f"Неизвестный код аэропорта: {point[icao_type]}")
-                # Валидация времени
-                arrival = datetime.strptime(point["arrival_time"], '%Y-%m-%d %H:%M')
-                departure = datetime.strptime(point["departure_time"], '%Y-%m-%d %H:%M')
-                if arrival >= departure:
-                    raise ValueError("Время прибытия должно быть раньше времени отъезда")
-                # Определение временной зоны точки
-                point_timezone = point.get("timezone") or get_timezone_by_city(point["location"]) or trip_timezone
-                # Конвертация времени в UTC
-                utc_arrival = local_to_utc(point["arrival_time"], point_timezone)
-                utc_departure = local_to_utc(point["departure_time"], point_timezone)
-                # Сохранение точки
-                point_cursor = conn.execute(
+            trip_point_id = point_cursor.lastrowid
+            # обработка расходов (если есть)
+            if "cost_amount" in point and "cost_currency" in point:
+                if not isinstance(point["cost_amount"], (int, float)):
+                    raise ValueError("Cost amount must be a number")
+                if not is_valid_currency(point["cost_currency"]):
+                    raise ValueError(f"Invalid currency: {point['cost_currency']}")
+                conn.execute(
                     """
-                    INSERT INTO trip_points (
-                        trip_id, location, arrival_time, departure_time,
-                        timezone, utc_arrival, utc_departure,
-                        flight_number, departure_icao, arrival_icao, hotel_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        trip_id,
-                        point["location"],
-                        point["arrival_time"],
-                        point["departure_time"],
-                        point_timezone,
-                        utc_arrival,
-                        utc_departure,
-                        point.get("flight_number", ""),
-                        point.get("departure_icao", ""),
-                        point.get("arrival_icao", ""),
-                        point.get("hotel_name", ""),
-                    ),
+                    INSERT INTO trip_costs (trip_point_id, amount, currency)
+                    VALUES (?, ?, ?)
+                """,
+                    (trip_point_id, point["cost_amount"], point["cost_currency"]),
                 )
-                trip_point_id = point_cursor.lastrowid
-                # Обработка расходов
-                if "cost_amount" in point and "cost_currency" in point:
-                    if not isinstance(point["cost_amount"], (int, float)):
-                        raise ValueError("Сумма расхода должна быть числом")
-                    if not is_valid_currency(point["cost_currency"]):
-                        raise ValueError(f"Неверная валюта: {point['cost_currency']}")
-                    
-                    conn.execute(
-                        "INSERT INTO trip_costs (trip_point_id, amount, currency) VALUES (?, ?, ?)",
-                        (trip_point_id, point["cost_amount"], point["cost_currency"]),
-                    )
-            conn.commit()
-            return trip_id
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        conn.commit()
+        return trip_id
     except sqlite3.Error as e:
-        return jsonify({"error": f"Ошибка базы данных: {str(e)}"}), 500
+        conn.rollback()
+        raise ValueError(f"Database error: {str(e)}")
     except Exception as e:
-        return jsonify({"error": f"Неизвестная ошибка: {str(e)}"}), 500
+        conn.rollback()
+        raise ValueError(f"Error creating trip: {str(e)}")
+    finally:
+        conn.close()
+
 
 
 @app.route("/create_trip", methods=["GET", "POST"])
-@login_required
+@login_required # нужна аутентификация
 def create_trip_route():
     user_id = current_user.id
-    try:
-        with get_db_connection() as conn:
-            icao_list = conn.execute("SELECT icao, airport FROM airports LIMIT 100").fetchall()
-            currencies = conn.execute(
-                "SELECT DISTINCT target_currency FROM exchange_rates"
-            ).fetchall()
-        if not currencies:
-            fetch_and_store_exchange_rates()
-            with get_db_connection() as conn:
-                currencies = conn.execute("SELECT DISTINCT target_currency FROM exchange_rates").fetchall()
-        if request.method == "GET":
-            return render_template("create_trip.html", 
-                                icao_list=icao_list, 
-                                available_currencies=[c['target_currency'] for c in currencies])
-        # Обработка POST запроса
+    conn = get_db_connection()
+    icao_list = conn.execute("SELECT icao, airport FROM airports LIMIT 100").fetchall() # получение списка аэропортов
+    # список доступных валют
+    currencies = conn.execute(
+        "SELECT DISTINCT target_currency FROM exchange_rates"
+    ).fetchall()
+    conn.close()
+    # создание поездки
+    if request.method == "POST":
         data = request.form
-        # Получаем основные данные поездки
         title = data.get("title")
         start_date = data.get("start_date")
         end_date = data.get("end_date")
         base_currency = data.get("base_currency", "USD")
-        # Получаем данные точек маршрута
+        departure_icao = data.get("departure_icao")
+        arrival_icao = data.get("arrival_icao")
         locations = data.getlist("locations[]")
         arrival_times = data.getlist("arrival_time[]")
         departure_times = data.getlist("departure_time[]")
         flight_numbers = data.getlist("flight_number[]")
         hotel_names = data.getlist("hotel_name[]")
-        departure_icaos = data.getlist("departure_icao[]")
-        arrival_icaos = data.getlist("arrival_icao[]")
         cost_amounts = data.getlist("cost_amount[]")
         cost_currencies = data.getlist("cost_currency[]")
-        # Валидация обязательных полей
-        if not title or not start_date or not end_date:
-            return render_template("create_trip.html",
-                                 error="Заполните все обязательные поля поездки",
-                                 icao_list=icao_list,
-                                 available_currencies=[c['target_currency'] for c in currencies],
-                                 form_data=request.form)
+        #if not all([title, start_date, end_date, departure_icao, arrival_icao]):
+        if not all([title, start_date, end_date]):
+            return jsonify({"error": "Missing required trip data"}), 400
         if not locations:
-            return render_template("create_trip.html",
-                                error="Добавьте хотя бы одну точку маршрута",
-                                icao_list=icao_list,
-                                available_currencies=[c['target_currency'] for c in currencies],
-                                form_data=request.form)
-        # Формируем список точек маршрута
-        points = []
-        for i in range(len(locations)):
-            # Проверяем обязательные поля для каждой точки
-            if not locations[i] or not arrival_times[i] or not departure_times[i]:
-                continue
-            try:
-                point = {
-                    "location": locations[i],
-                    "arrival_time": f"{arrival_times[i]}:00" if ':' not in arrival_times[i] else arrival_times[i],
-                    "departure_time": f"{departure_times[i]}:00" if ':' not in departure_times[i] else departure_times[i],
-                    "flight_number": flight_numbers[i] if i < len(flight_numbers) else "",
-                    "hotel_name": hotel_names[i] if i < len(hotel_names) else "",
-                    "departure_icao": departure_icaos[i] if i < len(departure_icaos) else "",
-                    "arrival_icao": arrival_icaos[i] if i < len(arrival_icaos) else "",
-                    "cost_amount": float(cost_amounts[i]) if i < len(cost_amounts) and cost_amounts[i] else 0,
-                    "cost_currency": cost_currencies[i] if i < len(cost_currencies) and cost_currencies[i] else "USD"
-                }
-                points.append(point)
-            except ValueError as e:
-                return render_template("create_trip.html",
-                                     error=f"Ошибка в данных точки маршрута: {str(e)}",
-                                     icao_list=icao_list,
-                                     available_currencies=[c['target_currency'] for c in currencies],
-                                     form_data=request.form)
-        # Создаем поездку
+            return jsonify({"error": "At least one location is required"}), 400
         try:
-            trip_id = create_trip(title, start_date, end_date, points, base_currency)
-            # Если create_trip возвращает Response (в случае ошибки)
-            if hasattr(trip_id, 'status_code'):
-                error_data = trip_id.get_json()
-                return render_template("create_trip.html",
-                                    error=error_data.get('error', 'Неизвестная ошибка'),
-                                    icao_list=icao_list,
-                                    available_currencies=[c['target_currency'] for c in currencies],
-                                    form_data=request.form)
-            
-            return redirect(url_for("get_trip_details", trip_id=trip_id))
+            create_trip(
+                title,
+                start_date,
+                end_date,
+                [
+                    {
+                        "location": locations[i],
+                        "arrival_time": arrival_times[i],
+                        "departure_time": departure_times[i],
+                        "flight_number": flight_numbers[i],
+                        "hotel_name": hotel_names[i],
+                        "departure_icao": departure_icao,
+                        "arrival_icao": arrival_icao,
+                        "cost_amount": float(cost_amounts[i]) if cost_amounts[i] else 0,
+                        "cost_currency": cost_currencies[i]
+                        if cost_currencies[i]
+                        else "USD",
+                    }
+                    for i in range(len(locations))
+                ],
+                base_currency,
+            )
+            return redirect(url_for("index"))
         except Exception as e:
-            return render_template("create_trip.html",
-                                error=f"Ошибка при создании поездки: {str(e)}",
-                                icao_list=icao_list,
-                                available_currencies=[c['target_currency'] for c in currencies],
-                                form_data=request.form)
-    except Exception as e:
-        print(f"Ошибка в create_trip_route: {str(e)}")
-        return render_template("create_trip.html",
-                             error="Внутренняя ошибка сервера",
-                             icao_list=icao_list,
-                             available_currencies=[c['target_currency'] for c in currencies])
+            return jsonify({"error": str(e)}), 500
+    return render_template(
+        "create_trip.html",
+        icao_list=icao_list,
+        available_currencies=[c["target_currency"] for c in currencies],
+    )
 
 
 # отображает список поездок текущего пользователя
