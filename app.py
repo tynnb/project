@@ -440,8 +440,9 @@ def create_trip_route():
         departure_icao = data.get("departure_icao")
         arrival_icao = data.get("arrival_icao")
         locations = data.getlist("locations[]")
-        arrival_times = data.getlist("arrival_time[]")
-        departure_times = data.getlist("departure_time[]")
+        # In your create_trip_route function, before calling create_trip:
+        arrival_times = [t.replace('T', ' ') if 'T' in t else t for t in arrival_times]
+        departure_times = [t.replace('T', ' ') if 'T' in t else t for t in departure_times]
         flight_numbers = data.getlist("flight_number[]")
         hotel_names = data.getlist("hotel_name[]")
         cost_amounts = data.getlist("cost_amount[]")
@@ -899,8 +900,11 @@ def local_to_utc(local_time_str, timezone_name):
     try:
         if not local_time_str or not timezone_name:
             return None
+        if 'T' in local_time_str:
+            naive_time = datetime.strptime(local_time_str, '%Y-%m-%dT%H:%M')
+        else:
+            naive_time = datetime.strptime(local_time_str, '%Y-%m-%d %H:%M')
         local_tz = pytz_timezone(timezone_name)
-        naive_time = datetime.strptime(local_time_str, '%Y-%m-%d %H:%M')
         local_time = local_tz.localize(naive_time)
         return local_time.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M')
     except Exception as e:
@@ -912,9 +916,11 @@ def utc_to_local(utc_time_str, timezone_name):
     try:
         if not utc_time_str or not timezone_name:
             return None
-        utc_time = datetime.strptime(utc_time_str, "%Y-%m-%d %H:%M").replace(
-            tzinfo=pytz.UTC
-        )
+        # Handle both formats
+        if 'T' in utc_time_str:
+            utc_time = datetime.strptime(utc_time_str, "%Y-%m-%dT%H:%M").replace(tzinfo=pytz.UTC)
+        else:
+            utc_time = datetime.strptime(utc_time_str, "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC)
         local_tz = pytz_timezone(timezone_name)
         return utc_time.astimezone(local_tz).strftime("%Y-%m-%d %H:%M")
     except Exception as e:
