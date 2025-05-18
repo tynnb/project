@@ -109,8 +109,7 @@
                 <a href="{{ url_for('get_trip_details', trip_id=trip.id) }}" class="btn btn-outline">
                     <i class="fas fa-info-circle"></i> Подробнее
                 </a>
-                <form method="DELETE" action="{{ url_for('delete_trip', trip_id=trip.id) }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <form method="POST" action="{{ url_for('delete_trip', trip_id=trip.id) }}">
                     <button type="submit" class="btn btn-danger">
                         <i class="fas fa-trash"></i> Удалить
                     </button>
